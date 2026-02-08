@@ -19,7 +19,6 @@
 ## Features
 
 - 🧑‍💻 Interactive, menu-driven CLI designed for BusyBox environments
-- 🧭 Consistent navigation with support for submenus, back, and exit
 - 🔧 Router utilities commonly needed on GL.iNet devices
 - 🪶 Lightweight shell script (POSIX `sh`, no bashisms)
 - 📦 No external dependencies beyond standard OpenWrt tools
@@ -63,13 +62,6 @@ Options may vary as new utilities are added, but generally include:
 - Diagnostics and status checks
 - Cleanup and maintenance actions
 
-Navigation is intentionally simple and predictable:
-
-- **Number keys** → perform actions  
-- **`b`** → go back one menu  
-- **`m`** → return to main menu  
-- **`q`** → quit the script  
-- **`?` / `h`** → help (where available)
 
 ---
 
@@ -78,7 +70,6 @@ Navigation is intentionally simple and predictable:
 This script is built with OpenWrt realities in mind:
 
 - Works over **SSH, serial consoles, and limited terminals**
-- ASCII-safe output (no reliance on Unicode or emojis for input)
 - Defensive coding to avoid bricking or misconfiguring devices
 - Emphasis on clarity over cleverness
 

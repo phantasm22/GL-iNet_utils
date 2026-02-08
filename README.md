@@ -41,8 +41,7 @@ ssh root@192.168.8.1
 2. Download the script:
 
 ```
-wget -O glinet_utils.sh https://raw.githubusercontent.com/phantasm22/GL-iNet_utils/main/glinet_utils.sh
-chmod +x glinet_utils.sh
+wget -O glinet_utils.sh https://raw.githubusercontent.com/phantasm22/GL-iNet_utils/main/glinet_utils.sh && chmod +x glinet_utils.sh
 ```
 
 3. Run the script:

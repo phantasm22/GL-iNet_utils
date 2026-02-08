@@ -360,6 +360,8 @@ show_hardware_info() {
                 fi
                 
                 radio_count=0
+                
+                if [ -d /sys/class/ieee80211/ ]; then
                 for radio in $(ls /sys/class/ieee80211/ 2>/dev/null | sort); do
                     radio_count=$((radio_count + 1))
                     
@@ -429,7 +431,7 @@ show_hardware_info() {
                             
                             printf "%bRadio %d: %s%b\n" "${CYAN}" "$radio_count" "$radio" "${RESET}"
                             printf "  Interface: %s\n" "$iface"
-                            [ -n "$hwmode" ] && printf "  Hardware: %s\n" "$hwmode"
+                            [ -n "$hwmode" ] && printf "  Hardware/Mode: %s\n" "$hwmode"
                             printf "  Band: %b%s%b\n" "${GREEN}" "$band" "${RESET}"
                             [ -n "$mimo" ] && printf "  MIMO: %b%s%b\n" "${GREEN}" "$mimo" "${RESET}"
                             [ -n "$channel" ] && printf "  Channel: %s\n" "$channel"
@@ -441,9 +443,82 @@ show_hardware_info() {
                         command -v usleep >/dev/null 2>&1 && usleep 400000
                     fi
                 done
+                fi
+
+                if [ $radio_count -eq 0 ]; then
+                   for iface in $(ls /sys/class/net/ 2>/dev/null | grep -E '^(ra|rai|rax|wlan)[0-9]*$' | grep -v '1$' | sort); do
+                        radio_count=$((radio_count + 1))
+                        
+                        # Determine band from interface name
+                        band="Unknown"
+                        case "$iface" in
+                           ra[0-9]*) band="2.4GHz" ;;
+                           rai[0-9]*|rax[0-9]*) band="5GHz" ;;
+                        esac
+                       
+                        # Find the wifi-iface section that uses this $iface
+                        iface_section=""
+                        for s in $(uci show wireless | grep '=wifi-iface' | cut -d. -f2 | cut -d= -f1 | grep -v '^guest'); do
+                           if uci get wireless.${s}.ifname 2>/dev/null | grep -q "^${iface}$"; then
+                              iface_section="$s"
+                              break
+                           fi
+                        done
+
+                        if [ -n "$iface_section" ]; then
+                           radio_section=$(uci get wireless.${iface_section}.device 2>/dev/null)
+                           if [ -n "$radio_section" ]; then
+                              htmode=$(uci get wireless.${radio_section}.htmode 2>/dev/null)
+                              channel=$(uci get wireless.${radio_section}.channel 2>/dev/null)
+                              if [ -n "$htmode" ]; then
+                                 hwmode="$htmode"
+                              else
+                                 info=$(iwinfo "$iface" info 2>/dev/null)
+                                 htmode=$(echo "$info" | grep "HT Mode:" | sed 's/.*HT Mode: //' | awk '{print $1}')
+                                 hwmode="${htmode:-Unknown}"
+                              fi
+
+                              uci_band=$(uci get wireless.${radio_section}.band 2>/dev/null)
+                                 case "$uci_band" in
+                                    2g) band="2.4GHz" ;;
+                                    5g) band="5GHz" ;;
+                                    6g) band="6GHz" ;;
+                                 esac
+                               
+                                 # MIMO from htmode
+                                 case "$htmode" in
+                                    *HE80*|*HE160*|*VHT80*|*VHT160*|*EHT160*|*EHT320*) mimo="4x4" ;;
+                                    *HE40*|*HE20*|*VHT40*|*VHT20*|*EHT80*) mimo="2x2" ;;
+                                    *) mimo="2x2" ;;
+                                 esac
+                           fi
+                        fi
+
+                        if [ -z "$channel" ] && command -v iwinfo >/dev/null 2>&1; then
+                           info=$(iwinfo "$iface" info 2>/dev/null)
+                           [ -n "$info" ] && channel=$(echo "$info" | grep "Channel:" | cut -d: -f2 | awk '{print $1}')
+                           [ -n "$info" ] && hwmode=$(echo "$info" | grep "Hardware:" | cut -d: -f2- | sed 's/^[[:space:]]*//')
+                           if echo "$info" | grep -q "2.4 GHz"; then band="2.4GHz"; fi
+                           if echo "$info" | grep -q "5 GHz"; then band="5GHz"; fi
+                        fi
+
+                        printf "%bRadio %d: %s%b\n" "${CYAN}" "$radio_count" "$iface" "${RESET}"
+                        printf "  Interface: %s\n" "$iface"
+                        [ -n "$hwmode" ] && printf "  Hardware/Mode: %s\n" "$hwmode"
+                        printf "  Band: %b%s%b\n" "${GREEN}" "$band" "${RESET}"
+                        [ -n "$mimo" ] && [ "$mimo" != "Unknown" ] && printf "  MIMO: %b%s%b\n" "${GREEN}" "$mimo" "${RESET}"
+                        [ -n "$channel" ] && printf "  Channel: %s\n" "$channel"
+                        printf "\n"
+                        
+                       if [ $radio_count -ge 2 ]; then
+                           command -v usleep >/dev/null 2>&1 && usleep 400000
+                       fi
+                    done
+                fi
                 
                 if [ $radio_count -eq 0 ]; then
                     printf "No wireless radios/interfaces detected.\n"
+                    printf "  (This device may use non-standard drivers. Try 'iwinfo' manually.)\n"
                 fi
                 ;;
         esac
@@ -611,7 +686,7 @@ AdGuardHome Filter Size Limit – BE3600 & Similar Models
 
 Why the limit exists
 ────────────────────
-On 512MB RAM routers (BE3600, some newer GL models), GL.iNet creates a 10MB file 
+On 512MB RAM routers (MT3600BE, some newer GL models), GL.iNet creates a 10MB file 
 and mounts it as /etc/AdGuardHome/data/filters. This caps filter cache size to 
 prevent AdGuardHome from consuming too much RAM and crashing the router.
 
@@ -693,7 +768,7 @@ manage_agh_storage() {
                 fi
                 
                 cat << 'WARNEOF'
-GL.iNet (BE3600 & similar models) limits AdGuardHome filter cache to 10MB 
+GL.iNet (MT3600BE & similar models) limits AdGuardHome filter cache to 10MB 
 by creating a small tmpfs/loop-mounted partition at /etc/AdGuardHome/data/filters.
 
 Removing this limit allows larger/more filter lists, but may cause high RAM usage 
@@ -741,8 +816,15 @@ WARNEOF
                 press_any_key
                 ;;
             2)
-                if [ $limit_active -eq 1 ]; then
-                    print_warning "Filter size limitation is already active"
+                if ! grep -q "mount_filter_img" "$AGH_INIT"; then
+                    print_warning "Filter size limitation feature (mount_filter_img) does not exist on this device/firmware."
+                    printf "  No changes needed — your AdGuardHome is not restricted by the 10MB filter limit.\n"
+                    press_any_key
+                    continue
+                fi
+
+                if ! grep -q "^#.*mount_filter_img" "$AGH_INIT"; then
+                    print_warning "Filter size limitation is already active (mount_filter_img is not commented out)."
                     press_any_key
                     continue
                 fi
@@ -876,10 +958,6 @@ manage_agh_lists() {
                 print_centered_header "Install Lists"
                 
                 printf "Select lists to install:\n\n"
-                printf "🅰️  All Allowlists\n"
-                printf "🅱️  All Blocklists\n"
-                printf "©️  Complete - All block/allow lists\n"
-                printf "\nOr select individual lists:\n"
                 
                 list_num=1
                 if [ "$phantasm_block" -eq 0 ]; then
@@ -901,6 +979,9 @@ manage_agh_lists() {
                     continue
                 fi
                 
+                printf "A) All Allowlists\n"
+                printf "B) All Blocklists\n"
+                printf "C) Complete - All block/allow lists\n"﹖
                 printf "\nChoose [A/B/C/1-3]: "
                 read -r install_choice
                 

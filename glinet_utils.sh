@@ -621,9 +621,9 @@ manage_agh_ui_updates() {
         
         printf "1️⃣  Enable UI Updates\n"
         printf "2️⃣  Disable UI Updates\n"
-        printf "\nM) Main menu\n"
-        printf "?) Help\n"
-        printf "\nChoose [1-2/M/?]: "
+        printf "0️⃣  Main menu\n"
+        printf "❓  Help\n"
+        printf "\nChoose [1-2/0/?]: "
         read -r agh_choice
         printf "\n"
         
@@ -660,10 +660,10 @@ manage_agh_ui_updates() {
                 fi
                 press_any_key
                 ;;
-            \?|h|H)
+            \?|h|H|❓)
                 show_agh_ui_help
                 ;;
-            m|M|3)
+            m|M|0)
                 return
                 ;;
             *)
@@ -753,9 +753,9 @@ manage_agh_storage() {
         
         printf "\n1️⃣  Remove Filter Size Limitation\n"
         printf "2️⃣  Re-enable Filter Size Limitation\n"
-        printf "\nM) Main menu\n"
-        printf "?) Help\n"
-        printf "\nChoose [1-2/M/?]: "
+        printf "0️⃣  Main menu\n"
+        printf "❓  Help\n"
+        printf "\nChoose [1-2/0/?]: "
         read -r storage_choice
         printf "\n"
         
@@ -844,10 +844,10 @@ WARNEOF
                 
                 press_any_key
                 ;;
-            \?|h|H)
+            \?|h|H|❓)
                 show_agh_storage_help
                 ;;
-            m|M|3)
+            m|M|0)
                 return
                 ;;
             *)
@@ -946,9 +946,9 @@ manage_agh_lists() {
         
         printf "\n1️⃣  Install Lists\n"
         printf "2️⃣  Uninstall Lists\n"
-        printf "\nM) Main menu\n"
-        printf "?) Help\n"
-        printf "\nChoose [1-2/M/?]: "
+        printf "0️⃣  Main menu\n"
+        printf "❓ Help\n"
+        printf "\nChoose [1-2/0/?]: "
         read -r list_choice
         printf "\n"
         
@@ -1114,10 +1114,10 @@ EOFALLOW
                 print_success "Lists removed from configuration"
                 press_any_key
                 ;;
-            \?|h|H)
+            \?|h|H|❓)
                 show_agh_lists_help
                 ;;
-            m|M|3)
+            m|M|0)
                 return
                 ;;
             *)
@@ -1204,8 +1204,8 @@ manage_zram() {
         printf "\n1️⃣  Install and Enable\n"
         printf "2️⃣  Disable\n"
         printf "3️⃣  Uninstall Package\n"
-        printf "\nM) Main menu\n"
-        printf "?) Help\n"
+        printf "0️⃣  Main menu\n"
+        printf "❓  Help\n"
         printf "\nChoose [1-3/M/?]: "
         read -r zram_choice
         printf "\n"
@@ -1296,7 +1296,7 @@ benchmark_system() {
         printf "1️⃣  CPU Stress Test\n"
         printf "2️⃣  CPU Benchmark (OpenSSL)\n"
         printf "3️⃣  Disk I/O Benchmark\n"
-        printf "4️⃣  Back to main menu\n"
+        printf "0️⃣  Back to main menu\n"
         printf "\nChoose [1-4]: "
         read -r bench_choice
         printf "\n"
@@ -1425,7 +1425,7 @@ benchmark_system() {
                 print_success "Disk benchmark completed"
                 press_any_key
                 ;;
-            4)
+            m|M|0)
                 return
                 ;;
             *)
@@ -1449,8 +1449,8 @@ view_uci_config() {
         printf "3️⃣  VPN Configuration\n"
         printf "4️⃣  System Settings\n"
         printf "5️⃣  Cloud Services\n"
-        printf "6️⃣  Back to main menu\n"
-        printf "\nChoose [1-6]: "
+        printf "0️⃣  Back to main menu\n"
+        printf "\nChoose [1-5/0]: "
         read -r config_choice
         printf "\n"
         
@@ -1724,7 +1724,7 @@ view_uci_config() {
                 printf "\n"
                 press_any_key
                 ;;
-            6)
+            m|M|0)
                 return
                 ;;
             *)
@@ -1758,7 +1758,7 @@ show_menu() {
         printf "6️⃣  System Benchmarks (CPU & Disk)\n"
         printf "7️⃣  View System Configuration (UCI)\n"
         printf "8️⃣  Check for Update\n"
-        printf "9️⃣  Exit\n"
+        printf "0️⃣  Exit\n"
         printf "\nChoose [1-9]: "
         read opt
         
@@ -1771,7 +1771,7 @@ show_menu() {
             6) benchmark_system ;;
             7) view_uci_config ;;
             8) check_self_update "$@"; press_any_key ;;
-            9) clear; printf "\n%b\n\n" "${GREEN}✅ Thanks for using GL.iNet Toolkit!${RESET}"; exit 0 ;;
+            0) clear; printf "\n%b\n\n" "${GREEN}✅ Thanks for using GL.iNet Toolkit!${RESET}"; exit 0 ;;
             *) print_error "Invalid option"; sleep 1 ;;
         esac
     done

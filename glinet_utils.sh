@@ -902,44 +902,55 @@ manage_agh_lists() {
         fi
 
         AGH_CONFIG=$(get_agh_config)
-        if [ -z "$AGH_CONFIG" ]; then
+        [ -z "$AGH_CONFIG" ] && {
             print_error "Could not find AdGuardHome config file"
             printf "\n"
             press_any_key
             return
-        fi
+        }
 
         agh_pid=$(pidof AdGuardHome)
         printf "%bRunning: YES (PID: %s)%b\n" "${GREEN}" "$agh_pid" "${RESET}"
         printf "Config: %b%s%b\n\n" "${GREEN}" "$AGH_CONFIG" "${RESET}"
 
-        # Recommended lists
         PHANTASM_BLOCKLIST="https://raw.githubusercontent.com/phantasm22/AdGuardHome-Lists/refs/heads/main/blocklist.txt"
         HAGEZI_BLOCKLIST="https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/pro.plus.txt"
         PHANTASM_ALLOWLIST="https://raw.githubusercontent.com/phantasm22/AdGuardHome-Lists/refs/heads/main/allowlist.txt"
 
         LISTS_DATA=$(mktemp)
 
-        # Recommended entries (status detected from config)
-        printf "1|Phantasm22's Blocklist|Blocklist|%d|1|1\n" \
-            "$(grep -c "Phantasm22's Blocklist" "$AGH_CONFIG")" >> "$LISTS_DATA"
-        printf "2|HaGeZi's Pro++ Blocklist|Blocklist|%d|1|1\n" \
-            "$(grep -c "HaGeZi's Pro++ Blocklist" "$AGH_CONFIG")" >> "$LISTS_DATA"
-        printf "3|Phantasm22's Allow List|Allowlist|%d|1|1\n" \
-            "$(grep -c "Phantasm22's Allow List" "$AGH_CONFIG")" >> "$LISTS_DATA"
+        # ---------------- Built-in recommended lists ----------------
+        detect_status() {
+            name="$1"
+            block=$(awk "/name: \"$name\"/{f=1} f&&/enabled:/{print;exit}" "$AGH_CONFIG")
+            [ -z "$block" ] && { echo 0; return; }
+            echo "$block" | grep -q true && echo 2 || echo 1
+        }
+
+        printf "1|Phantasm22's Blocklist|Blocklist|%s|1|1\n" \
+            "$(detect_status "Phantasm22's Blocklist")" >> "$LISTS_DATA"
+        printf "2|HaGeZi's Pro++ Blocklist|Blocklist|%s|1|1\n" \
+            "$(detect_status "HaGeZi's Pro++ Blocklist")" >> "$LISTS_DATA"
+        printf "3|Phantasm22's Allow List|Allowlist|%s|1|1\n" \
+            "$(detect_status "Phantasm22's Allow List")" >> "$LISTS_DATA"
 
         idx=3
         current_section=""
         name=""
+        enabled=""
 
-        # ---- SAFE YAML PARSER (no subshells, no phantom rows) ----
+        # ---------------- YAML-safe parser ----------------
         while IFS= read -r line; do
             case "$line" in
                 "filters:"|"whitelist_filters:")
                     current_section="$line"
                     ;;
                 *"- enabled:"*)
-                    name=""
+                    enabled=""
+                    case "$line" in
+                        *true*)  enabled=2 ;;
+                        *false*) enabled=1 ;;
+                    esac
                     ;;
                 *"name:"*)
                     name=$(printf "%s\n" "$line" \
@@ -961,39 +972,42 @@ manage_agh_lists() {
                     esac
 
                     idx=$((idx + 1))
-                    printf "%d|%s|%s|1|0|0\n" "$idx" "$name" "$type" >> "$LISTS_DATA"
+                    [ -z "$enabled" ] && enabled=1
+                    printf "%d|%s|%s|%s|0|0\n" "$idx" "$name" "$type" "$enabled" >> "$LISTS_DATA"
                     ;;
             esac
         done < "$AGH_CONFIG"
-        # ----------------------------------------------------------
 
         total_lists=$(wc -l < "$LISTS_DATA")
 
+        # ---------------- UI Loop ----------------
         while true; do
             clear
             print_centered_header "AdGuardHome Lists Manager"
 
-            printf "%-5s %-12s %-50s %s\n" "Sel." "Type" "Name" "Status"
+            printf "%s  %-12s %-50s %s\n" "Sel." "Type" "Name" "Status"
             printf "────────────────────────────────────────────────────────────────────────────────\n"
 
             while IFS='|' read -r idx name type status selected recommended; do
-                sel_char="[ ]"
-                [ "$selected" -eq 1 ] && sel_char="[✓]"
+                sel="[ ]"
+                [ "$selected" -eq 1 ] && sel="[✓]"
 
-                name_display="${idx}. ${name}"
-                [ "$recommended" -eq 1 ] && name_display="$name_display ★"
+                label="${idx}. ${name}"
+                [ "$recommended" -eq 1 ] && label="$label ★"
+                label=$(printf "%-50s" "$label")
 
-                name_pad=$(printf "%-50s" "$name_display")
+                case "$status" in
+                    0) status_text="Missing" ;;
+                    1) status_text="Installed (inactive)" ;;
+                    2) status_text="Installed (active)" ;;
+                esac
 
-                status_text="Installed"
-                [ "$status" -eq 0 ] && status_text="Missing"
-
-                printf "%-5s %-12s %s %s\n" "$sel_char" "$type" "$name_pad" "$status_text"
+                printf "%s  %-12s %s  %s\n" "$sel" "$type" "$label" "$status_text"
             done < "$LISTS_DATA"
 
             printf "────────────────────────────────────────────────────────────────────────────────\n"
-            printf "[A] All   [N] None   [T#] Toggle (e.g. T1 T3)   [C] Confirm   [0] Back   [?] Help\n\n"
-            printf "Default: Recommended lists (★) selected for install/reinstall, others unselected for removal\n"
+            printf "[A] All   [N] None   [T#] Toggle   [C] Confirm   [0] Back   [?] Help\n\n"
+            printf "Default: Recommended lists (★) selected for install/reinstall\n"
             printf "Enter command: "
             read -r input
 
@@ -1017,9 +1031,7 @@ manage_agh_lists() {
                     for num in $nums; do
                         tmp=$(mktemp)
                         while IFS='|' read -r a b c d e f; do
-                            if [ "$a" -eq "$num" ]; then
-                                e=$((1 - e))
-                            fi
+                            [ "$a" -eq "$num" ] && e=$((1 - e))
                             printf "%s|%s|%s|%s|%s|%s\n" "$a" "$b" "$c" "$d" "$e" "$f" >> "$tmp"
                         done < "$LISTS_DATA"
                         mv "$tmp" "$LISTS_DATA"
@@ -1040,6 +1052,7 @@ manage_agh_lists() {
         done
     done
 }
+
 
 
 # -----------------------------

@@ -622,7 +622,7 @@ manage_agh_ui_updates() {
         printf "1️⃣  Enable UI Updates\n"
         printf "2️⃣  Disable UI Updates\n"
         printf "0️⃣  Main menu\n"
-        printf "❓  Help\n"
+        printf "❓ Help\n"
         printf "\nChoose [1-2/0/?]: "
         read -r agh_choice
         printf "\n"
@@ -748,13 +748,13 @@ manage_agh_storage() {
             limit_active=1
             printf "\n  Filter Size Limit: %bACTIVE (10MB)%b\n" "${YELLOW}" "${RESET}"
         else
-            printf "\n  Filter Size Limit: %bREMOVED%b\n" "${GREEN}" "${RESET}"
+            printf "\n  Filter Size Limit: %bINACTIVE%b\n" "${GREEN}" "${RESET}"
         fi
         
         printf "\n1️⃣  Remove Filter Size Limitation\n"
         printf "2️⃣  Re-enable Filter Size Limitation\n"
         printf "0️⃣  Main menu\n"
-        printf "❓  Help\n"
+        printf "❓ Help\n"
         printf "\nChoose [1-2/0/?]: "
         read -r storage_choice
         printf "\n"
@@ -818,7 +818,7 @@ WARNEOF
             2)
                 if ! grep -q "mount_filter_img" "$AGH_INIT"; then
                     print_warning "Filter size limitation feature (mount_filter_img) does not exist on this device/firmware."
-                    printf "  No changes needed — your AdGuardHome is not restricted by the 10MB filter limit.\n"
+                    printf "   No changes possible — your AdGuardHome is not restricted by the 10MB filter limit.\n"
                     press_any_key
                     continue
                 fi
@@ -910,221 +910,249 @@ manage_agh_lists() {
         fi
         
         agh_pid=$(pidof AdGuardHome)
-        printf "%b\n" "${CYAN}Current Status:${RESET}"
-        printf "  Running: %bYES%b (PID: %s)\n" "${GREEN}" "${RESET}" "$agh_pid"
-        printf "  Config: %b%s%b\n" "${GREEN}" "$AGH_CONFIG" "${RESET}"
+        printf "%bRunning: YES (PID: %s)%b\n" "${GREEN}" "$agh_pid" "${RESET}"
+        printf "Config: %b%s%b\n\n" "${GREEN}" "$AGH_CONFIG" "${RESET}"
         
-        phantasm_block=$(grep -c "Phantasm22's Blocklist" "$AGH_CONFIG")
-        hagezi_block=$(grep -c "HaGeZi's Pro++ Blocklist" "$AGH_CONFIG")
-        phantasm_allow=$(grep -c "Phantasm22's Allow List" "$AGH_CONFIG")
+        # Define recommended lists
+        declare -A rec_lists
+        rec_lists["1"]="Phantasm22's Blocklist"
+        rec_lists["2"]="HaGeZi's Pro++ Blocklist"
+        rec_lists["3"]="Phantasm22's Allow List"
         
-        printf "\n%b\n" "${CYAN}Blocklists:${RESET}"
-        if [ "$phantasm_block" -gt 0 ]; then
-            printf "  %b✅ Phantasm22's Blocklist%b\n" "${GREEN}" "${RESET}"
-        else
-            printf "  ❌ Phantasm22's Blocklist\n"
-        fi
+        PHANTASM_BLOCKLIST="https://raw.githubusercontent.com/phantasm22/AdGuardHome-Lists/refs/heads/main/blocklist.txt"
+        HAGEZI_BLOCKLIST="https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/pro.plus.txt"
+        PHANTASM_ALLOWLIST="https://raw.githubusercontent.com/phantasm22/AdGuardHome-Lists/refs/heads/main/allowlist.txt"
         
-        if [ "$hagezi_block" -gt 0 ]; then
-            printf "  %b✅ HaGeZi's Pro++ Blocklist%b\n" "${GREEN}" "${RESET}"
-        else
-            printf "  ❌ HaGeZi's Pro++ Blocklist\n"
-        fi
+        # Collect all lists and their status
+        declare -A list_name list_type list_status list_selected list_index
+        local idx=1
         
-        all_blocks=$(grep -c "name:" "$AGH_CONFIG" 2>/dev/null || echo 0)
-        other_blocks=$((all_blocks - phantasm_block - hagezi_block))
-        if [ $other_blocks -gt 0 ]; then
-            printf "  %b📋 %d other blocklist(s)%b\n" "${CYAN}" "$other_blocks" "${RESET}"
-        fi
+        # Recommended lists first
+        for key in 1 2 3; do
+            name="${rec_lists[$key]}"
+            list_name[$idx]="$name"
+            list_index[$name]=$idx
+            
+            if [[ $name == *"Blocklist" ]]; then
+                list_type[$idx]="Blocklist"
+                list_status[$idx]=$(grep -c "$name" "$AGH_CONFIG")
+            else
+                list_type[$idx]="Allowlist"
+                list_status[$idx]=$(grep -c "$name" "$AGH_CONFIG")
+            fi
+            
+            list_selected[$idx]=1  # Default: selected for recommended
+            ((idx++))
+        done
         
-        printf "\n%b\n" "${CYAN}Allowlists:${RESET}"
-        if [ "$phantasm_allow" -gt 0 ]; then
-            printf "  %b✅ Phantasm22's Allow List%b\n" "${GREEN}" "${RESET}"
-        else
-            printf "  ❌ Phantasm22's Allow List\n"
-        fi
-        
-        printf "\n1️⃣  Install Lists\n"
-        printf "2️⃣  Uninstall Lists\n"
-        printf "0️⃣  Main menu\n"
-        printf "❓ Help\n"
-        printf "\nChoose [1-2/0/?]: "
-        read -r list_choice
-        printf "\n"
-        
-        case $list_choice in
-            1)
-                clear
-                print_centered_header "Install Lists"
-                
-                printf "Select lists to install:\n\n"
-                
-                list_num=1
-                if [ "$phantasm_block" -eq 0 ]; then
-                    printf "%d) Phantasm22's Blocklist\n" "$list_num"
-                    list_num=$((list_num + 1))
-                fi
-                if [ "$hagezi_block" -eq 0 ]; then
-                    printf "%d) HaGeZi's Pro++ Blocklist\n" "$list_num"
-                    list_num=$((list_num + 1))
-                fi
-                if [ "$phantasm_allow" -eq 0 ]; then
-                    printf "%d) Phantasm22's Allow List\n" "$list_num"
-                fi
-                
-                if [ "$phantasm_block" -gt 0 ] && [ "$hagezi_block" -gt 0 ] && [ "$phantasm_allow" -gt 0 ]; then
-                    printf "\n"
-                    print_warning "All Phantasm22/HaGeZi lists are already installed"
-                    press_any_key
+        # Other lists (parse from config)
+        while IFS= read -r line; do
+            if [[ $line =~ name:[[:space:]]*\"([^\"]+)\" ]]; then
+                name="${BASH_REMATCH[1]}"
+                # Skip recommended
+                if [[ $name == "Phantasm22's"* || $name == "HaGeZi's Pro++"* ]]; then
                     continue
                 fi
                 
-                printf "A) All Allowlists\n"
-                printf "B) All Blocklists\n"
-                printf "C) Complete - All block/allow lists\n"﹖
-                printf "\nChoose [A/B/C/1-3]: "
-                read -r install_choice
+                list_name[$idx]="$name"
+                list_index[$name]=$idx
                 
-                cp "$AGH_CONFIG" "${AGH_CONFIG}.backup.$(date +%Y%m%d_%H%M%S)" 2>/dev/null
-                print_success "Config backed up"
-                
-                PHANTASM_BLOCKLIST="https://raw.githubusercontent.com/phantasm22/AdGuardHome-Lists/refs/heads/main/blocklist.txt"
-                HAGEZI_BLOCKLIST="https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/pro.plus.txt"
-                PHANTASM_ALLOWLIST="https://raw.githubusercontent.com/phantasm22/AdGuardHome-Lists/refs/heads/main/allowlist.txt"
-                
-                install_phantasm_block=0
-                install_hagezi_block=0
-                install_phantasm_allow=0
-                
-                case "$install_choice" in
-                    a|A) install_phantasm_allow=1 ;;
-                    b|B) install_phantasm_block=1; install_hagezi_block=1 ;;
-                    c|C) install_phantasm_block=1; install_hagezi_block=1; install_phantasm_allow=1 ;;
-                    1) 
-                        if [ "$phantasm_block" -eq 0 ]; then
-                            install_phantasm_block=1
-                        elif [ "$hagezi_block" -eq 0 ]; then
-                            install_hagezi_block=1
-                        else
-                            install_phantasm_allow=1
-                        fi
-                        ;;
-                    2) 
-                        if [ "$phantasm_block" -eq 0 ] && [ "$hagezi_block" -eq 0 ]; then
-                            install_hagezi_block=1
-                        elif [ "$hagezi_block" -eq 0 ]; then
-                            install_hagezi_block=1
-                        else
-                            install_phantasm_allow=1
-                        fi
-                        ;;
-                    3) install_phantasm_allow=1 ;;
-                esac
-                
-                if ! grep -q "^filters:" "$AGH_CONFIG"; then
-                    print_error "No 'filters:' section found in config"
-                    press_any_key
-                    continue
+                if [[ $line =~ filters: ]]; then
+                    list_type[$idx]="Blocklist"
+                else
+                    list_type[$idx]="Allowlist"
                 fi
                 
-                temp_file=$(mktemp)
+                list_status[$idx]=1  # Present in config = installed
+                list_selected[$idx]=0  # Default: unselected for others
+                ((idx++))
+            fi
+        done < <(grep -E "name:.*\".*\"" "$AGH_CONFIG")
+        
+        total_lists=$((idx - 1))
+        
+        # Main display/toggle loop
+        while true; do
+            clear
+            print_centered_header "AdGuardHome Lists Manager"
+            
+            printf "Sel.  Name%*sStatus\n" $(( $(tput cols) - 60 )) ""  # dynamic padding for alignment
+            printf "────────────────────────────────────────────────────────────────────────────────\n"
+            
+            for i in $(seq 1 $total_lists); do
+                sel_char="[ ]"
+                [ ${list_selected[$i]} -eq 1 ] && sel_char="[✔]"
                 
-                if [ $install_phantasm_block -eq 1 ] || [ $install_hagezi_block -eq 1 ]; then
-                    printf "# Blocklists\n" > "$temp_file"
-                    
-                    if [ $install_phantasm_block -eq 1 ] && [ "$phantasm_block" -eq 0 ]; then
-                        timestamp=$(date +%s)
-                        cat >> "$temp_file" << 'EOFBLOCK'
-  - enabled: true
-    url: PHANTASM_BLOCKLIST_URL
-    name: Phantasm22's Blocklist
-    id: TIMESTAMP1
-EOFBLOCK
-                        sed -i "s|PHANTASM_BLOCKLIST_URL|$PHANTASM_BLOCKLIST|g" "$temp_file"
-                        sed -i "s|TIMESTAMP1|${timestamp}1|g" "$temp_file"
-                    fi
-                    
-                    if [ $install_hagezi_block -eq 1 ] && [ "$hagezi_block" -eq 0 ]; then
-                        timestamp=$(date +%s)
-                        cat >> "$temp_file" << 'EOFBLOCK'
-  - enabled: true
-    url: HAGEZI_BLOCKLIST_URL
-    name: HaGeZi's Pro++ Blocklist
-    id: TIMESTAMP2
-EOFBLOCK
-                        sed -i "s|HAGEZI_BLOCKLIST_URL|$HAGEZI_BLOCKLIST|g" "$temp_file"
-                        sed -i "s|TIMESTAMP2|${timestamp}2|g" "$temp_file"
-                    fi
-                    
-                    sed -i '/^filters:/r '"$temp_file" "$AGH_CONFIG"
+                name_display="${i}. ${list_name[$i]}"
+                if grep -q "${list_name[$i]}" <<< "Phantasm22's Blocklist HaGeZi's Pro++ Blocklist Phantasm22's Allow List"; then
+                    name_display="$name_display ★"
                 fi
                 
-                if [ $install_phantasm_allow -eq 1 ] && [ "$phantasm_allow" -eq 0 ]; then
+                name_pad=$(printf "%-55s" "$name_display")
+                
+                status_text="Installed"
+                [ ${list_status[$i]} -eq 0 ] && status_text="Missing"
+                
+                printf "%s %s %s\n" "$sel_char" "$name_pad" "$status_text"
+            done
+            
+            printf "────────────────────────────────────────────────────────────────────────────────\n"
+            printf "[A] All   [N] None   [T#] Toggle (e.g. T1 T3 T13)   [C] Confirm   [0] Back   [?] Help\n\n"
+            
+            printf "Default: Recommended lists (★) selected for install/reinstall, others unselected for removal\n"
+            printf "Enter command: "
+            read -r input
+            
+            case "$input" in
+                [aA]) 
+                    for i in $(seq 1 $total_lists); do list_selected[$i]=1; done
+                    ;;
+                [nN]) 
+                    for i in $(seq 1 $total_lists); do list_selected[$i]=0; done
+                    ;;
+                [tT]*)
+                    nums=$(echo "$input" | sed 's/[tT ]//g' | tr -d ' ' | grep -o '[0-9]\+')
+                    for num in $nums; do
+                        if [[ "$num" =~ ^[0-9]+$ ]] && [ "$num" -ge 1 ] && [ "$num" -le $total_lists ]; then
+                            list_selected[$num]=$((1 - list_selected[$num]))  # toggle
+                        fi
+                    done
+                    ;;
+                [cC])
+                    # Collect actions
+                    declare -a to_install to_reinstall to_remove
+                    
+                    for i in $(seq 1 $total_lists); do
+                        name="${list_name[$i]}"
+                        if [ ${list_selected[$i]} -eq 1 ]; then
+                            if [ ${list_status[$i]} -eq 0 ]; then
+                                to_install+=("$name")
+                            elif [ ${list_recommended[$i]} -eq 1 ]; then
+                                to_reinstall+=("$name")  # reinstall if selected and already present
+                            fi
+                        else
+                            if [ ${list_status[$i]} -eq 1 ]; then
+                                to_remove+=("$name")
+                            fi
+                        fi
+                    done
+                    
+                    if [ ${#to_install[@]} -eq 0 ] && [ ${#to_reinstall[@]} -eq 0 ] && [ ${#to_remove[@]} -eq 0 ]; then
+                        print_warning "No changes selected"
+                        press_any_key
+                        continue
+                    fi
+                    
+                    # Preview
+                    clear
+                    print_centered_header "Confirm Changes"
+                    
+                    if [ ${#to_install[@]} -gt 0 ] || [ ${#to_reinstall[@]} -gt 0 ]; then
+                        printf "%bInstall / Reinstall:%b\n" "${GREEN}" "${RESET}"
+                        for item in "${to_install[@]}"; do printf "  - %s (new)\n" "$item"; done
+                        for item in "${to_reinstall[@]}"; do printf "  - %s (reinstall)\n" "$item"; done
+                    fi
+                    
+                    if [ ${#to_remove[@]} -gt 0 ]; then
+                        printf "%bRemove:%b\n" "${RED}" "${RESET}"
+                        for item in "${to_remove[@]}"; do printf "  - %s\n" "$item"; done
+                    fi
+                    
+                    printf "\nProceed? [y/N]: "
+                    read -r confirm
+                    if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
+                        printf "Cancelled.\n"
+                        press_any_key
+                        continue
+                    fi
+                    
+                    # Backup
+                    cp "$AGH_CONFIG" "${AGH_CONFIG}.backup.$(date +%Y%m%d_%H%M%S)" 2>/dev/null
+                    print_success "Config backed up"
+                    
+                    # Install new/missing recommended
+                    temp_file=$(mktemp)
                     timestamp=$(date +%s)
-                    cat > "$temp_file" << 'EOFALLOW'
-# Allowlist
-  - enabled: true
-    url: PHANTASM_ALLOWLIST_URL
-    name: Phantasm22's Allow List
-    id: TIMESTAMP3
-EOFALLOW
-                    sed -i "s|PHANTASM_ALLOWLIST_URL|$PHANTASM_ALLOWLIST|g" "$temp_file"
-                    sed -i "s|TIMESTAMP3|${timestamp}3|g" "$temp_file"
                     
-                    if grep -q "^whitelist_filters:" "$AGH_CONFIG"; then
-                        sed -i '/^whitelist_filters:/r '"$temp_file" "$AGH_CONFIG"
-                    else
-                        printf "\nwhitelist_filters:\n" >> "$AGH_CONFIG"
-                        cat "$temp_file" >> "$AGH_CONFIG"
+                    for item in "${to_install[@]}"; do
+                        case "$item" in
+                            "Phantasm22's Blocklist")
+                                cat >> "$temp_file" << EOF
+  - enabled: true
+    url: $PHANTASM_BLOCKLIST
+    name: $item
+    id: ${timestamp}1
+EOF
+                                ;;
+                            "HaGeZi's Pro++ Blocklist")
+                                cat >> "$temp_file" << EOF
+  - enabled: true
+    url: $HAGEZI_BLOCKLIST
+    name: $item
+    id: ${timestamp}2
+EOF
+                                ;;
+                            "Phantasm22's Allow List")
+                                cat > "$temp_file.allow" << EOF
+  - enabled: true
+    url: $PHANTASM_ALLOWLIST
+    name: $item
+    id: ${timestamp}3
+EOF
+                                ;;
+                        esac
+                    done
+                    
+                    if [ -s "$temp_file" ]; then
+                        sed -i '/^filters:/r '"$temp_file" "$AGH_CONFIG"
                     fi
-                fi
-                
-                rm -f "$temp_file"
-                
-                printf "\n"
-                [ $install_phantasm_block -eq 1 ] && [ "$phantasm_block" -eq 0 ] && print_success "Phantasm22's Blocklist added"
-                [ $install_hagezi_block -eq 1 ] && [ "$hagezi_block" -eq 0 ] && print_success "HaGeZi's Pro++ Blocklist added"
-                [ $install_phantasm_allow -eq 1 ] && [ "$phantasm_allow" -eq 0 ] && print_success "Phantasm22's Allow List added"
-                
-                printf "\n%b\n" "${GREEN}✅ Lists installed! Updates will appear in AdGuardHome UI.${RESET}"
-                press_any_key
-                ;;
-            2)
-                if [ "$phantasm_block" -eq 0 ] && [ "$hagezi_block" -eq 0 ] && [ "$phantasm_allow" -eq 0 ]; then
-                    print_warning "No Phantasm22/HaGeZi lists are currently installed"
+                    
+                    if [ -f "$temp_file.allow" ]; then
+                        if grep -q "^whitelist_filters:" "$AGH_CONFIG"; then
+                            sed -i '/^whitelist_filters:/r '"$temp_file.allow" "$AGH_CONFIG"
+                        else
+                            printf "\nwhitelist_filters:\n" >> "$AGH_CONFIG"
+                            cat "$temp_file.allow" >> "$AGH_CONFIG"
+                        fi
+                        rm -f "$temp_file.allow"
+                    fi
+                    
+                    rm -f "$temp_file"
+                    
+                    # Removal
+                    for item in "${to_remove[@]}"; do
+                        case "$item" in
+                            "Phantasm22's Blocklist")
+                                sed -i '/Phantasm22'"'"'s Blocklist/,+3d' "$AGH_CONFIG"
+                                ;;
+                            "HaGeZi's Pro++ Blocklist")
+                                sed -i '/HaGeZi'"'"'s Pro++ Blocklist/,+3d' "$AGH_CONFIG"
+                                ;;
+                            "Phantasm22's Allow List")
+                                sed -i '/Phantasm22'"'"'s Allow List/,+3d' "$AGH_CONFIG"
+                                ;;
+                            *)
+                                sed -i "/name: \"$item\"/,+3d" "$AGH_CONFIG"
+                                ;;
+                        esac
+                    done
+                    
+                    print_success "Changes applied"
                     press_any_key
-                    continue
-                fi
-                
-                printf "%b" "${YELLOW}This will remove all Phantasm22 and HaGeZi lists. Continue? [y/N]: ${RESET}"
-                read -r confirm
-                if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
-                    printf "Removal cancelled.\n"
-                    press_any_key
-                    continue
-                fi
-                
-                cp "$AGH_CONFIG" "${AGH_CONFIG}.backup.$(date +%Y%m%d_%H%M%S)" 2>/dev/null
-                print_success "Config backed up"
-                
-                sed -i '/Phantasm22'"'"'s Blocklist/,+3d' "$AGH_CONFIG"
-                sed -i '/HaGeZi'"'"'s Pro++ Blocklist/,+3d' "$AGH_CONFIG"
-                sed -i '/Phantasm22'"'"'s Allow List/,+3d' "$AGH_CONFIG"
-                
-                print_success "Lists removed from configuration"
-                press_any_key
-                ;;
-            \?|h|H|❓)
-                show_agh_lists_help
-                ;;
-            m|M|0)
-                return
-                ;;
-            *)
-                print_error "Invalid option"
-                sleep 1
-                ;;
-        esac
+                    # Redraw main menu with updated status
+                    ;;
+                [0] | [mM] | "")
+                    return
+                    ;;
+                [?]|[\?])
+                    show_agh_lists_help
+                    ;;
+                *)
+                    print_error "Invalid command"
+                    sleep 1
+                    ;;
+            esac
+        done
     done
 }
 
@@ -1205,8 +1233,8 @@ manage_zram() {
         printf "2️⃣  Disable\n"
         printf "3️⃣  Uninstall Package\n"
         printf "0️⃣  Main menu\n"
-        printf "❓  Help\n"
-        printf "\nChoose [1-3/M/?]: "
+        printf "❓ Help\n"
+        printf "\nChoose [1-3/0/?]: "
         read -r zram_choice
         printf "\n"
         
@@ -1274,7 +1302,7 @@ manage_zram() {
             \?|h|H)
                 show_zram_help
                 ;;
-            m|M|4)
+            m|M|0)
                 return
                 ;;
             *)
@@ -1486,6 +1514,13 @@ view_uci_config() {
                 
                 count=0
                 for iface in $mlo_ifaces $five_ifaces $two_ifaces; do
+
+                    if [ $((count % 2)) -eq 0 ] && [ $count -gt 0 ]; then
+                       press_any_key
+                       clear
+                       print_centered_header "Wireless Networks"
+                    fi
+                    
                     ssid=$(uci get wireless.${iface}.ssid 2>/dev/null)
                     key=$(uci get wireless.${iface}.key 2>/dev/null)
                     encryption=$(uci get wireless.${iface}.encryption 2>/dev/null)
@@ -1530,13 +1565,7 @@ view_uci_config() {
                         printf "  Status: %bEnabled%b\n" "${GREEN}" "${RESET}"
                     fi
                     printf "\n"
-                    
                     count=$((count + 1))
-                    if [ $((count % 2)) -eq 0 ]; then
-                        press_any_key
-                        clear
-                        print_centered_header "Wireless Networks"
-                    fi
                 done
                 
                 press_any_key
@@ -1759,7 +1788,7 @@ show_menu() {
         printf "7️⃣  View System Configuration (UCI)\n"
         printf "8️⃣  Check for Update\n"
         printf "0️⃣  Exit\n"
-        printf "\nChoose [1-9]: "
+        printf "\nChoose [1-8/0]: "
         read opt
         
         case $opt in

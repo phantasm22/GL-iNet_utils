@@ -1031,7 +1031,7 @@ manage_agh_lists() {
                     done < "$LISTS_DATA"
                     mv "$tmp" "$LISTS_DATA"
                     ;;
-                |t|T|*)
+                t|T|*)
                     nums=$(printf "%s\n" "$input" | sed 's/[tT ]//g' | grep -o '[0-9]\+')
                     for num in $nums; do
                         tmp=$(mktemp)

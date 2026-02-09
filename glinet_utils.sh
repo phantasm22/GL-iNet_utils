@@ -1031,7 +1031,7 @@ manage_agh_lists() {
                     done < "$LISTS_DATA"
                     mv "$tmp" "$LISTS_DATA"
                     ;;
-                t|T|*)
+                t*|T*)
                     nums=$(printf "%s\n" "$input" | sed 's/[tT ]//g' | grep -o '[0-9]\+')
                     for num in $nums; do
                         tmp=$(mktemp)
@@ -1042,81 +1042,84 @@ manage_agh_lists() {
                         mv "$tmp" "$LISTS_DATA"
                     done
                     ;;
-                c|C)    
+                c|C)
                     to_install=""
                     to_remove=""
-                    
-                    for i in $(seq 1 $total_lists); do
-                        if [ "${sel_arr[$i]}" -eq 1 ]; then
-                            if [ "${status_arr[$i]}" -eq 0 ] && [ "${rec_arr[$i]}" -eq 1 ]; then
-                                to_install="$to_install $i"
+
+                    # Walk LISTS_DATA directly
+                    while IFS='|' read -r idx name type status selected recommended; do
+                        # status: 0=missing, 1=installed-inactive, 2=installed-active
+                        if [ "$selected" -eq 1 ]; then
+                            if [ "$status" -eq 0 ]; then
+                                to_install="$to_install $name"
                             fi
                         else
-                            if [ "${status_arr[$i]}" -ne 0 ]; then
-                                to_remove="$to_remove $i"
+                            if [ "$status" -ne 0 ]; then
+                                to_remove="$to_remove $name"
                             fi
                         fi
-                    done
-                    
+                    done < "$LISTS_DATA"
+
                     if [ -z "$to_install" ] && [ -z "$to_remove" ]; then
                         print_warning "No changes selected"
                         press_any_key
                         continue
                     fi
-                    
-                    # Preview
+
+                    # ---------- Preview ----------
                     clear
                     print_centered_header "Confirm Changes"
-                    
+
                     if [ -n "$to_install" ]; then
                         printf "%bInstall / Reinstall:%b\n" "${GREEN}" "${RESET}"
-                        for item in $to_install; do
-                            printf "  - %s\n" "${name_arr[$i]}"
-                        done
+                        printf "%s\n" "$to_install" | sed '/^$/d; s/^/  - /'
                     fi
-                    
+
                     if [ -n "$to_remove" ]; then
                         printf "%bRemove:%b\n" "${RED}" "${RESET}"
-                        for item in $to_remove; do
-                            printf "  - %s\n" "${name_arr[$i]}"
-                        done
+                        printf "%s\n" "$to_remove" | sed '/^$/d; s/^/  - /'
                     fi
-                    
+
                     printf "\nProceed? [y/N]: "
                     read -r confirm
-                    if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
-                        printf "Cancelled.\n"
-                        press_any_key
-                        continue
-                    fi
-                    
-                    # Backup
+                    case "$confirm" in
+                        y|Y) ;;
+                        *)
+                            printf "Cancelled.\n"
+                            press_any_key
+                            continue
+                            ;;
+                    esac
+
+                    # ---------- Backup ----------
                     cp "$AGH_CONFIG" "${AGH_CONFIG}.backup.$(date +%Y%m%d_%H%M%S)" 2>/dev/null
                     print_success "Config backed up"
-                    
-                    # Install missing recommended
+
+                    # ---------- Install ----------
                     temp_file=$(mktemp)
                     timestamp=$(date +%s)
-                    
-                    for i in $to_install; do
-                        item="${name_arr[$i]}"
+
+                    printf "%s\n" "$to_install" | while IFS= read -r item; do
                         case "$item" in
                             "Phantasm22's Blocklist")
-                                printf "  - enabled: true\n    url: %s\n    name: %s\n    id: %s\n" "$PHANTASM_BLOCKLIST" "$item" "${timestamp}1" >> "$temp_file"
+                                printf "  - enabled: true\n    url: %s\n    name: %s\n    id: %s\n" \
+                                    "$PHANTASM_BLOCKLIST" "$item" "${timestamp}1" >> "$temp_file"
                                 ;;
                             "HaGeZi's Pro++ Blocklist")
-                                printf "  - enabled: true\n    url: %s\n    name: %s\n    id: %s\n" "$HAGEZI_BLOCKLIST" "$item" "${timestamp}2" >> "$temp_file"
+                                printf "  - enabled: true\n    url: %s\n    name: %s\n    id: %s\n" \
+                                    "$HAGEZI_BLOCKLIST" "$item" "${timestamp}2" >> "$temp_file"
                                 ;;
                             "Phantasm22's Allow List")
-                                printf "# Allowlist\n  - enabled: true\n    url: %s\n    name: %s\n    id: %s\n" "$PHANTASM_ALLOWLIST" "$item" "${timestamp}3" > "$temp_file.allow"
+                                printf "# Allowlist\n  - enabled: true\n    url: %s\n    name: %s\n    id: %s\n" \
+                                    "$PHANTASM_ALLOWLIST" "$item" "${timestamp}3" > "$temp_file.allow"
                                 ;;
                         esac
                     done
-                    
+
                     if [ -s "$temp_file" ]; then
                         sed -i '/^filters:/r '"$temp_file" "$AGH_CONFIG"
                     fi
-                    
+
                     if [ -f "$temp_file.allow" ]; then
                         if grep -q "^whitelist_filters:" "$AGH_CONFIG"; then
                             sed -i '/^whitelist_filters:/r '"$temp_file.allow" "$AGH_CONFIG"
@@ -1126,12 +1129,11 @@ manage_agh_lists() {
                         fi
                         rm -f "$temp_file.allow"
                     fi
-                    
+
                     rm -f "$temp_file"
-                    
-                    # Removal
-                    for i in $to_remove; do
-                        item="${name_arr[$i]}"
+
+                    # ---------- Removal ----------
+                    printf "%s\n" "$to_remove" | while IFS= read -r item; do
                         case "$item" in
                             "Phantasm22's Blocklist")
                                 sed -i '/Phantasm22'"'"'s Blocklist/,+3d' "$AGH_CONFIG"
@@ -1147,7 +1149,7 @@ manage_agh_lists() {
                                 ;;
                         esac
                     done
-                    
+
                     print_success "Changes applied"
                     press_any_key
                     ;;

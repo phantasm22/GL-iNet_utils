@@ -893,14 +893,14 @@ manage_agh_lists() {
     while true; do
         clear
         print_centered_header "AdGuardHome Lists Manager"
-        
+
         if ! is_agh_running; then
             print_error "AdGuardHome is not running"
             printf "\n"
             press_any_key
             return
         fi
-        
+
         AGH_CONFIG=$(get_agh_config)
         if [ -z "$AGH_CONFIG" ]; then
             print_error "Could not find AdGuardHome config file"
@@ -908,244 +908,124 @@ manage_agh_lists() {
             press_any_key
             return
         fi
-        
+
         agh_pid=$(pidof AdGuardHome)
         printf "%bRunning: YES (PID: %s)%b\n" "${GREEN}" "$agh_pid" "${RESET}"
         printf "Config: %b%s%b\n\n" "${GREEN}" "$AGH_CONFIG" "${RESET}"
-        
-        # Define recommended lists
+
+        # Recommended lists
         PHANTASM_BLOCKLIST="https://raw.githubusercontent.com/phantasm22/AdGuardHome-Lists/refs/heads/main/blocklist.txt"
         HAGEZI_BLOCKLIST="https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/pro.plus.txt"
         PHANTASM_ALLOWLIST="https://raw.githubusercontent.com/phantasm22/AdGuardHome-Lists/refs/heads/main/allowlist.txt"
-        
-        # Build lists data in temp file for POSIX compatibility
+
         LISTS_DATA=$(mktemp)
-        
-        # Recommended lists (pre-defined)
-        printf "1|Phantasm22's Blocklist|Blocklist|%d|1|1\n" "$(grep -c "Phantasm22's Blocklist" "$AGH_CONFIG")" >> "$LISTS_DATA"
-        printf "2|HaGeZi's Pro++ Blocklist|Blocklist|%d|1|1\n" "$(grep -c "HaGeZi's Pro++ Blocklist" "$AGH_CONFIG")" >> "$LISTS_DATA"
-        printf "3|Phantasm22's Allow List|Allowlist|%d|1|1\n" "$(grep -c "Phantasm22's Allow List" "$AGH_CONFIG")" >> "$LISTS_DATA"
-        
+
+        # Recommended entries (status detected from config)
+        printf "1|Phantasm22's Blocklist|Blocklist|%d|1|1\n" \
+            "$(grep -c "Phantasm22's Blocklist" "$AGH_CONFIG")" >> "$LISTS_DATA"
+        printf "2|HaGeZi's Pro++ Blocklist|Blocklist|%d|1|1\n" \
+            "$(grep -c "HaGeZi's Pro++ Blocklist" "$AGH_CONFIG")" >> "$LISTS_DATA"
+        printf "3|Phantasm22's Allow List|Allowlist|%d|1|1\n" \
+            "$(grep -c "Phantasm22's Allow List" "$AGH_CONFIG")" >> "$LISTS_DATA"
+
         idx=3
-        
-        # Other lists (parse from config)
-        grep 'name:.*".*"' "$AGH_CONFIG" | while IFS= read -r line; do
-            name=$(echo "$line" | sed -n 's/.*name:[[:space:]]*"\([^"]*\)".*/\1/p')
-            
-            case "$name" in
-                "Phantasm22's Blocklist"|"HaGeZi's Pro++ Blocklist"|"Phantasm22's Allow List")
-                    continue
+        current_section=""
+        name=""
+
+        # ---- SAFE YAML PARSER (no subshells, no phantom rows) ----
+        while IFS= read -r line; do
+            case "$line" in
+                "filters:"|"whitelist_filters:")
+                    current_section="$line"
+                    ;;
+                *"- enabled:"*)
+                    name=""
+                    ;;
+                *"name:"*)
+                    name=$(printf "%s\n" "$line" \
+                        | sed 's/^[[:space:]]*name:[[:space:]]*//; s/^"//; s/"$//')
+                    ;;
+                *"id:"*)
+                    [ -z "$name" ] && continue
+
+                    case "$current_section" in
+                        "filters:")           type="Blocklist" ;;
+                        "whitelist_filters:") type="Allowlist" ;;
+                        *) continue ;;
+                    esac
+
+                    case "$name" in
+                        "Phantasm22's Blocklist"|"HaGeZi's Pro++ Blocklist"|"Phantasm22's Allow List")
+                            continue
+                            ;;
+                    esac
+
+                    idx=$((idx + 1))
+                    printf "%d|%s|%s|1|0|0\n" "$idx" "$name" "$type" >> "$LISTS_DATA"
                     ;;
             esac
-            
-            idx=$((idx + 1))
-            
-            if echo "$line" | grep -q '^filters:' ; then
-                type="Blocklist"
-            else
-                type="Allowlist"
-            fi
-            
-            printf "%d|%s|%s|1|0|0\n" "$idx" "$name" "$type" >> "$LISTS_DATA"
-        done
-        
+        done < "$AGH_CONFIG"
+        # ----------------------------------------------------------
+
         total_lists=$(wc -l < "$LISTS_DATA")
-        
-        # Main display/toggle loop
+
         while true; do
             clear
             print_centered_header "AdGuardHome Lists Manager"
-            
-            # Header
+
             printf "%-5s %-12s %-50s %s\n" "Sel." "Type" "Name" "Status"
             printf "────────────────────────────────────────────────────────────────────────────────\n"
-            
-            # Display lists
+
             while IFS='|' read -r idx name type status selected recommended; do
                 sel_char="[ ]"
-                [ "$selected" -eq 1 ] && sel_char="[✔]"
-                
+                [ "$selected" -eq 1 ] && sel_char="[✓]"
+
                 name_display="${idx}. ${name}"
-                if [ "$recommended" -eq 1 ]; then
-                    name_display="$name_display ★"
-                fi
-                
+                [ "$recommended" -eq 1 ] && name_display="$name_display ★"
+
                 name_pad=$(printf "%-50s" "$name_display")
-                
+
                 status_text="Installed"
                 [ "$status" -eq 0 ] && status_text="Missing"
-                
+
                 printf "%-5s %-12s %s %s\n" "$sel_char" "$type" "$name_pad" "$status_text"
             done < "$LISTS_DATA"
-            
+
             printf "────────────────────────────────────────────────────────────────────────────────\n"
             printf "[A] All   [N] None   [T#] Toggle (e.g. T1 T3)   [C] Confirm   [0] Back   [?] Help\n\n"
-            
             printf "Default: Recommended lists (★) selected for install/reinstall, others unselected for removal\n"
             printf "Enter command: "
             read -r input
-            
+
             case "$input" in
                 [aA])
-                    # Select all
-                    TEMP_FILE=$(mktemp)
-                    while IFS='|' read -r idx name type status selected recommended; do
-                        printf "%s|%s|%s|%s|1|%s\n" "$idx" "$name" "$type" "$status" "$recommended" >> "$TEMP_FILE"
+                    tmp=$(mktemp)
+                    while IFS='|' read -r a b c d e f; do
+                        printf "%s|%s|%s|%s|1|%s\n" "$a" "$b" "$c" "$d" "$f" >> "$tmp"
                     done < "$LISTS_DATA"
-                    mv "$TEMP_FILE" "$LISTS_DATA"
+                    mv "$tmp" "$LISTS_DATA"
                     ;;
                 [nN])
-                    # Select none
-                    TEMP_FILE=$(mktemp)
-                    while IFS='|' read -r idx name type status selected recommended; do
-                        printf "%s|%s|%s|%s|0|%s\n" "$idx" "$name" "$type" "$status" "$recommended" >> "$TEMP_FILE"
+                    tmp=$(mktemp)
+                    while IFS='|' read -r a b c d e f; do
+                        printf "%s|%s|%s|%s|0|%s\n" "$a" "$b" "$c" "$d" "$f" >> "$tmp"
                     done < "$LISTS_DATA"
-                    mv "$TEMP_FILE" "$LISTS_DATA"
+                    mv "$tmp" "$LISTS_DATA"
                     ;;
                 [tT]*)
-                    # Toggle specific items
-                    nums=$(echo "$input" | sed 's/[tT ]//g' | tr -d ' ' | grep -o '[0-9]\+')
+                    nums=$(printf "%s\n" "$input" | sed 's/[tT ]//g' | grep -o '[0-9]\+')
                     for num in $nums; do
-                        if [ "$num" -ge 1 ] && [ "$num" -le "$total_lists" ]; then
-                            TEMP_FILE=$(mktemp)
-                            while IFS='|' read -r idx name type status selected recommended; do
-                                if [ "$idx" -eq "$num" ]; then
-                                    new_selected=$((1 - selected))
-                                    printf "%s|%s|%s|%s|%s|%s\n" "$idx" "$name" "$type" "$status" "$new_selected" "$recommended" >> "$TEMP_FILE"
-                                else
-                                    printf "%s|%s|%s|%s|%s|%s\n" "$idx" "$name" "$type" "$status" "$selected" "$recommended" >> "$TEMP_FILE"
-                                fi
-                            done < "$LISTS_DATA"
-                            mv "$TEMP_FILE" "$LISTS_DATA"
-                        fi
+                        tmp=$(mktemp)
+                        while IFS='|' read -r a b c d e f; do
+                            if [ "$a" -eq "$num" ]; then
+                                e=$((1 - e))
+                            fi
+                            printf "%s|%s|%s|%s|%s|%s\n" "$a" "$b" "$c" "$d" "$e" "$f" >> "$tmp"
+                        done < "$LISTS_DATA"
+                        mv "$tmp" "$LISTS_DATA"
                     done
                     ;;
-                [cC])
-                    # Collect actions
-                    to_install=""
-                    to_remove=""
-                    
-                    while IFS='|' read -r idx name type status selected recommended; do
-                        if [ "$selected" -eq 1 ]; then
-                            if [ "$status" -eq 0 ] && [ "$recommended" -eq 1 ]; then
-                                to_install="$to_install|$name"
-                            fi
-                        else
-                            if [ "$status" -eq 1 ]; then
-                                to_remove="$to_remove|$name"
-                            fi
-                        fi
-                    done < "$LISTS_DATA"
-                    
-                    if [ -z "$to_install" ] && [ -z "$to_remove" ]; then
-                        print_warning "No changes selected"
-                        press_any_key
-                        continue
-                    fi
-                    
-                    # Preview
-                    clear
-                    print_centered_header "Confirm Changes"
-                    
-                    if [ -n "$to_install" ]; then
-                        printf "%bInstall / Reinstall:%b\n" "${GREEN}" "${RESET}"
-                        echo "$to_install" | tr '|' '\n' | grep -v '^$' | while read -r item; do
-                            printf "  - %s\n" "$item"
-                        done
-                    fi
-                    
-                    if [ -n "$to_remove" ]; then
-                        printf "%bRemove:%b\n" "${RED}" "${RESET}"
-                        echo "$to_remove" | tr '|' '\n' | grep -v '^$' | while read -r item; do
-                            printf "  - %s\n" "$item"
-                        done
-                    fi
-                    
-                    printf "\nProceed? [y/N]: "
-                    read -r confirm
-                    if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
-                        printf "Cancelled.\n"
-                        press_any_key
-                        continue
-                    fi
-                    
-                    # Backup
-                    cp "$AGH_CONFIG" "${AGH_CONFIG}.backup.$(date +%Y%m%d_%H%M%S)" 2>/dev/null
-                    print_success "Config backed up"
-                    
-                    # Install missing recommended
-                    temp_file=$(mktemp)
-                    timestamp=$(date +%s)
-                    
-                    echo "$to_install" | tr '|' '\n' | grep -v '^$' | while read -r item; do
-                        case "$item" in
-                            "Phantasm22's Blocklist")
-                                cat >> "$temp_file" << EOFBLOCK
-  - enabled: true
-    url: $PHANTASM_BLOCKLIST
-    name: $item
-    id: ${timestamp}1
-EOFBLOCK
-                                ;;
-                            "HaGeZi's Pro++ Blocklist")
-                                cat >> "$temp_file" << EOFBLOCK
-  - enabled: true
-    url: $HAGEZI_BLOCKLIST
-    name: $item
-    id: ${timestamp}2
-EOFBLOCK
-                                ;;
-                            "Phantasm22's Allow List")
-                                cat > "${temp_file}.allow" << EOFALLOW
-  - enabled: true
-    url: $PHANTASM_ALLOWLIST
-    name: $item
-    id: ${timestamp}3
-EOFALLOW
-                                ;;
-                        esac
-                    done
-                    
-                    if [ -s "$temp_file" ]; then
-                        sed -i '/^filters:/r '"$temp_file" "$AGH_CONFIG"
-                    fi
-                    
-                    if [ -f "${temp_file}.allow" ]; then
-                        if grep -q "^whitelist_filters:" "$AGH_CONFIG"; then
-                            sed -i '/^whitelist_filters:/r '"${temp_file}.allow" "$AGH_CONFIG"
-                        else
-                            printf "\nwhitelist_filters:\n" >> "$AGH_CONFIG"
-                            cat "${temp_file}.allow" >> "$AGH_CONFIG"
-                        fi
-                        rm -f "${temp_file}.allow"
-                    fi
-                    
-                    rm -f "$temp_file"
-                    
-                    # Removal
-                    echo "$to_remove" | tr '|' '\n' | grep -v '^$' | while read -r item; do
-                        case "$item" in
-                            "Phantasm22's Blocklist")
-                                sed -i '/Phantasm22'"'"'s Blocklist/,+3d' "$AGH_CONFIG"
-                                ;;
-                            "HaGeZi's Pro++ Blocklist")
-                                sed -i '/HaGeZi'"'"'s Pro++ Blocklist/,+3d' "$AGH_CONFIG"
-                                ;;
-                            "Phantasm22's Allow List")
-                                sed -i '/Phantasm22'"'"'s Allow List/,+3d' "$AGH_CONFIG"
-                                ;;
-                            *)
-                                sed -i "/name: \"$item\"/,+3d" "$AGH_CONFIG"
-                                ;;
-                        esac
-                    done
-                    
-                    print_success "Changes applied"
-                    rm -f "$LISTS_DATA"
-                    press_any_key
-                    return
-                    ;;
-                [0] | [mM] | "")
+                [0]|[mM]|"")
                     rm -f "$LISTS_DATA"
                     return
                     ;;
@@ -1160,6 +1040,7 @@ EOFALLOW
         done
     done
 }
+
 
 # -----------------------------
 # 5) Zram Swap Management

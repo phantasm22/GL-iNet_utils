@@ -1049,11 +1049,11 @@ manage_agh_lists() {
                     for i in $(seq 1 $total_lists); do
                         if [ "${sel_arr[$i]}" -eq 1 ]; then
                             if [ "${status_arr[$i]}" -eq 0 ] && [ "${rec_arr[$i]}" -eq 1 ]; then
-                                to_install="$to_install ${name_arr[$i]}"
+                                to_install="$to_install $i"
                             fi
                         else
-                            if [ "${status_arr[$i]}" -eq 1 ]; then
-                                to_remove="$to_remove ${name_arr[$i]}"
+                            if [ "${status_arr[$i]}" -ne 0 ]; then
+                                to_remove="$to_remove $i"
                             fi
                         fi
                     done
@@ -1071,14 +1071,14 @@ manage_agh_lists() {
                     if [ -n "$to_install" ]; then
                         printf "%bInstall / Reinstall:%b\n" "${GREEN}" "${RESET}"
                         for item in $to_install; do
-                            printf "  - %s\n" "$item"
+                            printf "  - %s\n" "${name_arr[$i]}"
                         done
                     fi
                     
                     if [ -n "$to_remove" ]; then
                         printf "%bRemove:%b\n" "${RED}" "${RESET}"
                         for item in $to_remove; do
-                            printf "  - %s\n" "$item"
+                            printf "  - %s\n" "${name_arr[$i]}"
                         done
                     fi
                     
@@ -1098,7 +1098,8 @@ manage_agh_lists() {
                     temp_file=$(mktemp)
                     timestamp=$(date +%s)
                     
-                    for item in $to_install; do
+                    for i in $to_install; do
+                        item="${name_arr[$i]}"
                         case "$item" in
                             "Phantasm22's Blocklist")
                                 printf "  - enabled: true\n    url: %s\n    name: %s\n    id: %s\n" "$PHANTASM_BLOCKLIST" "$item" "${timestamp}1" >> "$temp_file"
@@ -1129,7 +1130,8 @@ manage_agh_lists() {
                     rm -f "$temp_file"
                     
                     # Removal
-                    for item in $to_remove; do
+                    for i in $to_remove; do
+                        item="${name_arr[$i]}"
                         case "$item" in
                             "Phantasm22's Blocklist")
                                 sed -i '/Phantasm22'"'"'s Blocklist/,+3d' "$AGH_CONFIG"

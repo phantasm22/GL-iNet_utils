@@ -818,7 +818,7 @@ WARNEOF
             2)
                 if ! grep -q "mount_filter_img" "$AGH_INIT"; then
                     print_warning "Filter size limitation feature (mount_filter_img) does not exist on this device/firmware."
-                    printf "   No changes possible — your AdGuardHome is not restricted by the 10MB filter limit.\n"
+                    printf "   No changes possible — your AdGuardHome is not restricted by the filter size limit.\n"
                     press_any_key
                     continue
                 fi
@@ -890,285 +890,210 @@ HELPEOF
 }
 
 manage_agh_lists() {
+    LIST_REGISTRY="1|Phantasm22's Blocklist|Blocklist|https://raw.githubusercontent.com/phantasm22/AdGuardHome-Lists/refs/heads/main/blocklist.txt
+2|HaGeZi's Pro++ Blocklist|Blocklist|https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/pro.plus.txt
+3|Phantasm22's Allow List|Allowlist|https://raw.githubusercontent.com/phantasm22/AdGuardHome-Lists/refs/heads/main/allowlist.txt"
+
     while true; do
         clear
         print_centered_header "AdGuardHome Lists Manager"
 
-        if ! is_agh_running; then
-            print_error "AdGuardHome is not running"
-            printf "\n"
-            press_any_key
-            return
-        fi
-
         AGH_CONFIG=$(get_agh_config)
-        [ -z "$AGH_CONFIG" ] && {
-            print_error "Could not find AdGuardHome config file"
-            printf "\n"
-            press_any_key
-            return
-        }
+        [ -z "$AGH_CONFIG" ] && { print_error "Config not found"; press_any_key; return; }
+        
+        LISTS_DATA=$(mktemp -t agh_data.XXXXXX)
 
-        agh_pid=$(pidof AdGuardHome)
-        printf "%bRunning: YES (PID: %s)%b\n" "${GREEN}" "$agh_pid" "${RESET}"
-        printf "Config: %b%s%b\n\n" "${GREEN}" "$AGH_CONFIG" "${RESET}"
+        # ---------------------------------------------------------
+        # 1. PARSING (Fixed for + signs and quotes)
+        # ---------------------------------------------------------
+        while IFS='|' read -r r_id r_name r_type r_url; do
+			status_val=$(awk -v n="$r_name" '
+                BEGIN { RS = "[[:space:]]*- "; FS = "\n" }
+                # index() does a literal string search. It ignores plus signs and quotes.
+                index($0, "name: " n) || index($0, "name: \"" n "\"") {
+                    if ($0 ~ "enabled: true") { print "true"; exit }
+                    if ($0 ~ "enabled: false") { print "false"; exit }
+                }
+			' "$AGH_CONFIG")
+    		status=0; [ "$status_val" = "false" ] && status=1; [ "$status_val" = "true" ] && status=2
+    		printf "%s|%s|%s|%s|1|1|%s\n" "$r_id" "$r_name" "$r_type" "$status" "$r_url" >> "$LISTS_DATA"
+done <<EOF
+$LIST_REGISTRY
+EOF
 
-        PHANTASM_BLOCKLIST="https://raw.githubusercontent.com/phantasm22/AdGuardHome-Lists/refs/heads/main/blocklist.txt"
-        HAGEZI_BLOCKLIST="https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/pro.plus.txt"
-        PHANTASM_ALLOWLIST="https://raw.githubusercontent.com/phantasm22/AdGuardHome-Lists/refs/heads/main/allowlist.txt"
+        local next_idx=$(($(echo "$LIST_REGISTRY" | wc -l) + 1))
+        awk '
+            /^filters:/ || /^whitelist_filters:/ {in_sec=1; type=($1=="filters:"?"Blocklist":"Allowlist")}
+            /^[a-z_]+:/ && !/^filters:/ && !/^whitelist_filters:/ {in_sec=0}
+            in_sec && /name: / {
+                gsub(/^[[:space:]]*name:[[:space:]]*/, "");
+                gsub(/^"|",?$/, "");
+                if ($0 != "") print type "|" $0
+            }
+        ' "$AGH_CONFIG" | while IFS='|' read -r c_type c_name; do
+			if ! grep -q "|$c_name|" "$LISTS_DATA"; then
+                status_val=$(awk -v n="$c_name" '
+                    BEGIN { RS = "[[:space:]]*- "; FS = "\n" } 
+                    $0 ~ "name: [\" ]*" n "[\" ]*" {
+                        if ($0 ~ "enabled: true") { print "true"; exit }
+                        if ($0 ~ "enabled: false") { print "false"; exit }
+                    }
+                ' "$AGH_CONFIG")
+				status=1; [ "$status_val" = "true" ] && status=2
+                printf "%s|%s|%s|%s|0|0|CUSTOM\n" "$next_idx" "$c_name" "$c_type" "$status" >> "$LISTS_DATA"
+                next_idx=$((next_idx + 1))
+            fi
+        done
 
-        LISTS_DATA=$(mktemp)
-
-        # ---------------- Built-in recommended lists ----------------
-        detect_status() {
-            name="$1"
-            block=$(awk "/name: \"$name\"/{f=1} f&&/enabled:/{print;exit}" "$AGH_CONFIG")
-            [ -z "$block" ] && { echo 0; return; }
-            echo "$block" | grep -q true && echo 2 || echo 1
-        }
-
-        printf "1|Phantasm22's Blocklist|Blocklist|%s|1|1\n" \
-            "$(detect_status "Phantasm22's Blocklist")" >> "$LISTS_DATA"
-        printf "2|HaGeZi's Pro++ Blocklist|Blocklist|%s|1|1\n" \
-            "$(detect_status "HaGeZi's Pro++ Blocklist")" >> "$LISTS_DATA"
-        printf "3|Phantasm22's Allow List|Allowlist|%s|1|1\n" \
-            "$(detect_status "Phantasm22's Allow List")" >> "$LISTS_DATA"
-
-        idx=3
-        current_section=""
-        name=""
-        enabled=""
-
-        # ---------------- YAML-safe parser ----------------
-        while IFS= read -r line; do
-            case "$line" in
-                "filters:"|"whitelist_filters:")
-                    current_section="$line"
-                    ;;
-                *"- enabled:"*)
-                    enabled=""
-                    case "$line" in
-                        *true*)  enabled=2 ;;
-                        *false*) enabled=1 ;;
-                    esac
-                    ;;
-                *"name:"*)
-                    name=$(printf "%s\n" "$line" \
-                        | sed 's/^[[:space:]]*name:[[:space:]]*//; s/^"//; s/"$//')
-                    ;;
-                *"id:"*)
-                    [ -z "$name" ] && continue
-
-                    case "$current_section" in
-                        "filters:")           type="Blocklist" ;;
-                        "whitelist_filters:") type="Allowlist" ;;
-                        *) continue ;;
-                    esac
-
-                    case "$name" in
-                        "Phantasm22's Blocklist"|"HaGeZi's Pro++ Blocklist"|"Phantasm22's Allow List")
-                            continue
-                            ;;
-                    esac
-
-                    idx=$((idx + 1))
-                    [ -z "$enabled" ] && enabled=1
-                    printf "%d|%s|%s|%s|0|0\n" "$idx" "$name" "$type" "$enabled" >> "$LISTS_DATA"
-                    ;;
-            esac
-        done < "$AGH_CONFIG"
-
-        total_lists=$(wc -l < "$LISTS_DATA")
-
-        # ---------------- UI Loop ----------------
+        # ---------------------------------------------------------
+        # 2. UI LOOP
+        # ---------------------------------------------------------
         while true; do
             clear
             print_centered_header "AdGuardHome Lists Manager"
-
-            printf "%s  %-12s %-50s %s\n" "Sel." "Type" "Name" "Status"
-            printf "────────────────────────────────────────────────────────────────────────────────\n"
-
-            while IFS='|' read -r idx name type status selected recommended; do
-                sel="[ ]"
-                [ "$selected" -eq 1 ] && sel="[✓]"
-
-                label="${idx}. ${name}"
-
-                if [ "$recommended" -eq 1 ]; then
-                   label="$label ★"
-                   label=$(printf "%-52s" "$label")
-                else
-                   label=$(printf "%-50s" "$label")
-                fi
-
-                case "$status" in
-                    0) status_text="Missing" ;;
-                    1) status_text="Installed (inactive)" ;;
-                    2) status_text="Installed (active)" ;;
-                esac
-
-                printf "%s  %-12s %-50s %-22s\n" "$sel" "$type" "$label" "$status_text"
+            printf "Sel.  %-12s %-50s %-20s\n" "Type" "Name" "Status"
+            printf "──────────────────────────────────────────────────────────────────────────────────────────\n"
+            while IFS='|' read -r idx name type stat sel rec url; do
+                s_box="[ ]  "; [ "$sel" -eq 1 ] && s_box="[✓]  "
+                case "$stat" in 0) s_txt="Missing" ;; 1) s_txt="Installed (inactive)" ;; 2) s_txt="Installed (active)" ;; esac
+                label="$idx. $name"; [ "$rec" -eq 1 ] && label="$label ★"
+                [ "$rec" -eq 1 ] && label=$(printf "%-52s" "$label") || label=$(printf "%-50s" "$label")
+                printf "%-4s %-12s %-50s %-20s\n" "$s_box" "$type" "$label" "$s_txt"
             done < "$LISTS_DATA"
-
-            printf "────────────────────────────────────────────────────────────────────────────────\n"
-            printf "[A] All   [N] None   [T#] Toggle   [C] Confirm   [0] Back   [?] Help\n\n"
-            printf "Default: Recommended lists (★) selected for install/reinstall\n"
+            printf "──────────────────────────────────────────────────────────────────────────────────────────\n"
+            printf "[A] All   [N] None   [T#] Toggle   [C] Confirm   [0] Back\n"
             printf "Enter command: "
             read -r input
 
             case "$input" in
-                a|A)
-                    tmp=$(mktemp)
-                    while IFS='|' read -r a b c d e f; do
-                        printf "%s|%s|%s|%s|1|%s\n" "$a" "$b" "$c" "$d" "$f" >> "$tmp"
-                    done < "$LISTS_DATA"
-                    mv "$tmp" "$LISTS_DATA"
-                    ;;
-                n|N)
-                    tmp=$(mktemp)
-                    while IFS='|' read -r a b c d e f; do
-                        printf "%s|%s|%s|%s|0|%s\n" "$a" "$b" "$c" "$d" "$f" >> "$tmp"
-                    done < "$LISTS_DATA"
-                    mv "$tmp" "$LISTS_DATA"
-                    ;;
+                a|A) sed -i 's/\(.*|.*|.*|.*|\)0\(|.*|.*\)/\11\2/' "$LISTS_DATA" ;;
+                n|N) sed -i 's/\(.*|.*|.*|.*|\)1\(|.*|.*\)/\10\2/' "$LISTS_DATA" ;;
                 t*|T*)
-                    nums=$(printf "%s\n" "$input" | sed 's/[tT ]//g' | grep -o '[0-9]\+')
-                    for num in $nums; do
-                        tmp=$(mktemp)
-                        while IFS='|' read -r a b c d e f; do
-                            [ "$a" -eq "$num" ] && e=$((1 - e))
-                            printf "%s|%s|%s|%s|%s|%s\n" "$a" "$b" "$c" "$d" "$e" "$f" >> "$tmp"
-                        done < "$LISTS_DATA"
-                        mv "$tmp" "$LISTS_DATA"
-                    done
+                    num=$(echo "$input" | sed 's/[tT]//g')
+                    [ -n "$num" ] && awk -F'|' -v t="$num" 'BEGIN{OFS="|"} {if($1==t) $5=($5==1?0:1); print}' "$LISTS_DATA" > "$LISTS_DATA.tmp" && mv "$LISTS_DATA.tmp" "$LISTS_DATA"
                     ;;
                 c|C)
-                    to_install=""
-                    to_remove=""
+                    to_install=$(awk -F'|' '$5==1 && $4==0' "$LISTS_DATA")
+                    to_remove=$(awk -F'|' '$5==0 && $4!=0' "$LISTS_DATA")
+                    
+					if [ -z "$to_install" ] && [ -z "$to_remove" ]; then
+                        print_warning "No changes to apply (Selection matches current status)"
+                        sleep 2
+                        break 
+                    fi
 
-                    # Walk LISTS_DATA directly
-                    while IFS='|' read -r idx name type status selected recommended; do
-                        # status: 0=missing, 1=installed-inactive, 2=installed-active
-                        if [ "$selected" -eq 1 ]; then
-                            if [ "$status" -eq 0 ]; then
-                                to_install="$to_install $name"
-                            fi
+					# 3. CONFIRMATION SCREEN
+					clear
+                    print_centered_header "Confirm List Changes"
+                    [ -n "$to_install" ] && { printf "${GREEN}TO BE INSTALLED:${RESET}\n"; echo "$to_install" | cut -d'|' -f2 | sed 's/^/  + /'; }
+                    [ -n "$to_remove" ] && { printf "\n${RED}TO BE REMOVED:${RESET}\n"; echo "$to_remove" | cut -d'|' -f2 | sed 's/^/  - /'; }
+                    
+                    printf "\nProceed with changes? [y/N]: "; read -r confirm
+                    [ "$confirm" != "y" ] && [ "$confirm" != "Y" ] && break
+
+                    # 4. BACKUP CREATION
+                    stamp=$(date +%Y%m%d%H%M%S)
+                    BACKUP_FILE="${AGH_CONFIG}.backup.${stamp}"
+                    cp "$AGH_CONFIG" "$BACKUP_FILE"
+
+                    /etc/init.d/adguardhome stop >/dev/null 2>&1
+
+                   	# 5. REMOVAL (Your logic, hardened for line order)
+					echo "$to_remove" | while IFS='|' read -r i n t s sel rec u; do
+						
+						# 1. Find the exact line number of the name escaping special chars (e.g. +) and optional quotes
+						n=$(echo "$n" | sed 's/+/\\+/g; s/\./\\./g')
+						name_line=$(grep -nE "name: \"?$n\"?" "$AGH_CONFIG" | cut -d: -f1 | head -n1)
+						
+						if [ -n "$name_line" ]; then
+							# 2. Find the nearest "- enabled:" ABOVE that name line
+							# This ensures we hit the start of THE SPECIFIC block
+							start_del=$(sed -n "1,${name_line}p" "$AGH_CONFIG" | grep -n "enabled:" | tail -n1 | cut -d: -f1)
+							
+							# 3. Delete 4 lines starting from that "- enabled" line
+							if [ -n "$start_del" ]; then
+								sed -i "${start_del},$((start_del + 3))d" "$AGH_CONFIG"
+							fi
+						fi
+					done
+
+                    # 6. INSTALLATION
+					if [ -n "$to_install" ]; then
+						count=0
+						echo "$to_install" | while IFS='|' read -r i n t s sel rec u; do
+							[ -z "$u" ] || [ "$u" = "CUSTOM" ] && continue
+							
+							ts="$(( $(date +%s) - 1769040000 ))$count"
+							
+							new_block="- enabled: true\\
+url: $u\\
+name: \"$n\"\\
+id: $ts"
+
+							target_head="filters:"
+							[ "$t" = "Allowlist" ] && target_head="whitelist_filters:"
+
+							# Remove empty array brackets if they exist
+							sed -i "s/^$target_head \[\]/$target_head/" "$AGH_CONFIG"
+							
+							# Append the new block directly after the header line
+							sed -i "/^$target_head/a $new_block" "$AGH_CONFIG"
+
+							# Force 2 spaces for dash, 4 for children
+							sed -i "s/^- enabled:/  - enabled:/" "$AGH_CONFIG"
+							sed -i "s/^url:/    url:/" "$AGH_CONFIG"
+							sed -i "s/^name:/    name:/" "$AGH_CONFIG"
+							sed -i "s/^id:/    id:/" "$AGH_CONFIG"
+							
+							count=$((count + 1))
+						done
+					fi
+
+					# 7. CLEANUP (Strict Header Matching)
+					for head in "filters" "whitelist_filters"; do
+						# Match the header only at the start of a line to avoid 'filtering_enabled' etc.
+						if grep -qE "^$head:|^  $head:" "$AGH_CONFIG"; then
+							# Check the line immediately following the specific header
+							# We use -A 1 to see the 'After' line
+							next_line=$(grep -A 1 -E "^$head:|^  $head:" "$AGH_CONFIG" | tail -n 1)
+							
+							# If the next line isn't a list item (- enabled), the section is empty or broken
+							if ! echo "$next_line" | grep -q "\- enabled:"; then
+								# Force the header to empty array and ensure no hanging fragments remain
+								sed -i "/^$head:/ s/.*/$head: []/" "$AGH_CONFIG"
+								sed -i "/^  $head:/ s/.*/  $head: []/" "$AGH_CONFIG"
+							fi
+						fi
+					done
+
+                    # 8. RESTART & ERROR RECOVERY
+                    /etc/init.d/adguardhome start >/dev/null 2>&1
+                    sleep 2
+                    if ! pidof AdGuardHome >/dev/null; then
+                        printf "\n"
+						print_error "AdGuardHome failed to start! Reverting..."
+                        cp "$AGH_CONFIG" "${AGH_CONFIG}.error.${stamp}"
+                        cp "$BACKUP_FILE" "$AGH_CONFIG"
+                        /etc/init.d/adguardhome start >/dev/null 2>&1
+                        if ! pidof AdGuardHome >/dev/null; then
+                            print_error "FATAL: Could not restore AGH even with backup!"
                         else
-                            if [ "$status" -ne 0 ]; then
-                                to_remove="$to_remove $name"
-                            fi
+                            print_warning "Restoring last known good configuration."
+							print_success "AdGuardHome restarted successfully with restored config"
                         fi
-                    done < "$LISTS_DATA"
-
-                    if [ -z "$to_install" ] && [ -z "$to_remove" ]; then
-                        print_warning "No changes selected"
-                        press_any_key
-                        continue
+                    else
+                        printf "\n"
+						print_success "Changes applied" 
+						print_success "Backup file created: $(basename $BACKUP_FILE)"
+						print_success "AdGuardHome restarted successfully with new configuration"
                     fi
-
-                    # ---------- Preview ----------
-                    clear
-                    print_centered_header "Confirm Changes"
-
-                    if [ -n "$to_install" ]; then
-                        printf "%bInstall / Reinstall:%b\n" "${GREEN}" "${RESET}"
-                        printf "%s\n" "$to_install" | sed '/^$/d; s/^/  - /'
-                    fi
-
-                    if [ -n "$to_remove" ]; then
-                        printf "%bRemove:%b\n" "${RED}" "${RESET}"
-                        printf "%s\n" "$to_remove" | sed '/^$/d; s/^/  - /'
-                    fi
-
-                    printf "\nProceed? [y/N]: "
-                    read -r confirm
-                    case "$confirm" in
-                        y|Y) ;;
-                        *)
-                            printf "Cancelled.\n"
-                            press_any_key
-                            continue
-                            ;;
-                    esac
-
-                    # ---------- Backup ----------
-                    cp "$AGH_CONFIG" "${AGH_CONFIG}.backup.$(date +%Y%m%d_%H%M%S)" 2>/dev/null
-                    print_success "Config backed up"
-
-                    # ---------- Install ----------
-                    temp_file=$(mktemp)
-                    timestamp=$(date +%s)
-
-                    printf "%s\n" "$to_install" | while IFS= read -r item; do
-                        case "$item" in
-                            "Phantasm22's Blocklist")
-                                printf "  - enabled: true\n    url: %s\n    name: %s\n    id: %s\n" \
-                                    "$PHANTASM_BLOCKLIST" "$item" "${timestamp}1" >> "$temp_file"
-                                ;;
-                            "HaGeZi's Pro++ Blocklist")
-                                printf "  - enabled: true\n    url: %s\n    name: %s\n    id: %s\n" \
-                                    "$HAGEZI_BLOCKLIST" "$item" "${timestamp}2" >> "$temp_file"
-                                ;;
-                            "Phantasm22's Allow List")
-                                printf "# Allowlist\n  - enabled: true\n    url: %s\n    name: %s\n    id: %s\n" \
-                                    "$PHANTASM_ALLOWLIST" "$item" "${timestamp}3" > "$temp_file.allow"
-                                ;;
-                        esac
-                    done
-
-                    if [ -s "$temp_file" ]; then
-                        sed -i '/^filters:/r '"$temp_file" "$AGH_CONFIG"
-                    fi
-
-                    if [ -f "$temp_file.allow" ]; then
-                        if grep -q "^whitelist_filters:" "$AGH_CONFIG"; then
-                            sed -i '/^whitelist_filters:/r '"$temp_file.allow" "$AGH_CONFIG"
-                        else
-                            printf "\nwhitelist_filters:\n" >> "$AGH_CONFIG"
-                            cat "$temp_file.allow" >> "$AGH_CONFIG"
-                        fi
-                        rm -f "$temp_file.allow"
-                    fi
-
-                    rm -f "$temp_file"
-
-                    # ---------- Removal ----------
-                    printf "%s\n" "$to_remove" | while IFS= read -r item; do
-                        case "$item" in
-                            "Phantasm22's Blocklist")
-                                sed -i '/Phantasm22'"'"'s Blocklist/,+3d' "$AGH_CONFIG"
-                                ;;
-                            "HaGeZi's Pro++ Blocklist")
-                                sed -i '/HaGeZi'"'"'s Pro++ Blocklist/,+3d' "$AGH_CONFIG"
-                                ;;
-                            "Phantasm22's Allow List")
-                                sed -i '/Phantasm22'"'"'s Allow List/,+3d' "$AGH_CONFIG"
-                                ;;
-                            *)
-                                sed -i "/name: \"$item\"/,+3d" "$AGH_CONFIG"
-                                ;;
-                        esac
-                    done
-
-                    print_success "Changes applied"
-                    press_any_key
+                    press_any_key; rm -f "$LISTS_DATA"; break 1
                     ;;
-                [0]|[mM]|"")
-                    rm -f "$LISTS_DATA"
-                    return
-                    ;;
-                [?]|[\?]|❓)
-                    show_agh_lists_help
-                    ;;
-                *)
-                    print_error "Invalid command"
-                    sleep 1
-                    ;;
+                0) rm -f "$LISTS_DATA"; return ;;
             esac
         done
     done
 }
-
 
 
 # -----------------------------
@@ -1733,7 +1658,7 @@ view_uci_config() {
                 ;;
             5)
                 clear
-                print_centered_header "☁️  Cloud Services"
+                print_centered_header "Cloud Services"
                 
                 printf "%b\n" "${CYAN}GoodCloud:${RESET}"
                 if [ -f /etc/config/gl-cloud ]; then
@@ -1750,7 +1675,10 @@ view_uci_config() {
                     
                     [ -n "$gc_email" ] && printf "  Account: %b%s%b\n" "${GREEN}" "$gc_email" "${RESET}"
                     [ -n "$gc_server" ] && printf "  Server: %s\n" "$gc_server"
-                    [ -n "$gc_deviceid" ] && printf "  Token: %s\n" "${gc_deviceid:0:16}..."
+                    if [ -n "$gc_deviceid" ]; then
+                        token_short=$(printf "%s" "$gc_deviceid" | cut -c1-16)
+                        printf "  Token: %s\n" "${token_short}..."
+                    fi
                 else
                     print_warning "GoodCloud not configured"
                 fi

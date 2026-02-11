@@ -1158,13 +1158,12 @@ agh_maintenance_hub() {
                    press_any_key
                fi ;;
             6) clear
-               print_centered_header "AdGuardHome System Logs (Press Ctrl+C to return to menu)"
-               sleep 1
-               (
-                    logread -l 20 -e "AdGuardHome" 2>/dev/null
-                    logread -f -e "AdGuardHome" 2>/dev/null
-               )
-               printf "\n"
+               print_centered_header "AdGuardHome System Logs (Ctrl+C to exit)"
+               sleep 2
+               trap 'printf "\n\n" ; print_warning "Stopping log viewing..."' INT
+               logread -l 20 -e "AdGuardHome" 2>/dev/null
+               logread -f -e "AdGuardHome" 2>/dev/null
+               trap - INT
                press_any_key
                ;;
             0) break ;;

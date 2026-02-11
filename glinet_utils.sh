@@ -355,171 +355,58 @@ show_hardware_info() {
             4)
                 printf "%b%bPage 4 of $total_pages: Wireless Interfaces%b\n\n" "${BOLD}" "${CYAN}" "${RESET}"
                 
-                if ! command -v iwinfo >/dev/null 2>&1 && ! command -v iw >/dev/null 2>&1; then
-                    printf "Neither iwinfo nor iw found - limited wireless info available.\n"
-                fi
-                
                 radio_count=0
-                
-                if [ -d /sys/class/ieee80211/ ]; then
-                for radio in $(ls /sys/class/ieee80211/ 2>/dev/null | sort); do
+                # Use UCI as the source of truth for the Radio list
+                for radio in $(uci show wireless | grep "=wifi-device" | cut -d. -f2 | cut -d= -f1); do
                     radio_count=$((radio_count + 1))
                     
-                    iface=$(iw dev 2>/dev/null | grep -A 1 "phy#${radio#phy}" | grep Interface | awk '{print $2}' | head -1)
-                    [ -z "$iface" ] && iface=$(ls /sys/class/ieee80211/$radio/device/net/ 2>/dev/null | head -1)
+                    # 1. Configuration from UCI
+                    htmode=$(uci -q get wireless.${radio}.htmode)
+                    band=$(uci -q get wireless.${radio}.band)
                     
-                    if [ -n "$iface" ] && command -v iwinfo >/dev/null 2>&1; then
-                        info=$(iwinfo "$iface" info 2>/dev/null)
-                        if [ -n "$info" ]; then
-                            hwmode=$(echo "$info" | grep "Hardware:" | cut -d: -f2- | sed 's/^[[:space:]]*//')
-                            channel=$(echo "$info" | grep "Channel:" | cut -d: -f2 | awk '{print $1}')
-                            
-                            band=""
-                            uci_band=$(uci get wireless.${radio}.band 2>/dev/null)
-                            case "$uci_band" in
-                                2g) band="2.4GHz" ;;
-                                5g) band="5GHz" ;;
-                                6g) band="6GHz" ;;
-                            esac
-                            
-                            if [ -z "$band" ]; then
-                                phy_freqs=$(iw phy "$radio" info 2>/dev/null | grep -o "[0-9][0-9][0-9][0-9] MHz" | awk '{print $1}' | sort -u)
-                                
-                                has_2ghz=0
-                                has_5ghz=0
-                                has_6ghz=0
-                                
-                                for freq in $phy_freqs; do
-                                    if [ "$freq" -ge 2400 ] && [ "$freq" -le 2500 ]; then
-                                        has_2ghz=1
-                                    elif [ "$freq" -ge 5000 ] && [ "$freq" -le 6000 ]; then
-                                        has_5ghz=1
-                                    elif [ "$freq" -ge 6000 ]; then
-                                        has_6ghz=1
-                                    fi
-                                done
-                                
-                                if [ "$has_6ghz" -eq 1 ] && [ "$has_5ghz" -eq 1 ]; then
-                                    band="5GHz/6GHz"
-                                elif [ "$has_6ghz" -eq 1 ]; then
-                                    band="6GHz"
-                                elif [ "$has_5ghz" -eq 1 ]; then
-                                    band="5GHz"
-                                elif [ "$has_2ghz" -eq 1 ]; then
-                                    band="2.4GHz"
-                                fi
-                            fi
-                            
-                            [ -z "$band" ] && band="Unknown"
-                            
-                            mimo=""
-                            htmode=$(uci get wireless.${radio}.htmode 2>/dev/null)
-                            case "$htmode" in
-                                *HE80*|*HE160*|*VHT80*|*VHT160*|*EHT160*|*EHT320*) mimo="4x4" ;;
-                                *HE40*|*HE20*|*VHT40*|*VHT20*|*EHT80*) mimo="2x2" ;;
-                                *) 
-                                    streams=$(iw phy "$radio" info 2>/dev/null | grep -m1 "RX streams:" | awk '{print $3}')
-                                    [ -z "$streams" ] && streams=$(iw phy "$radio" info 2>/dev/null | grep -m1 "TX streams:" | awk '{print $3}')
-                                    case "$streams" in
-                                        4) mimo="4x4" ;;
-                                        2) mimo="2x2" ;;
-                                        1) mimo="1x1" ;;
-                                        *) mimo="2x2" ;;
-                                    esac
-                                    ;;
-                            esac
-                            
-                            printf "%bRadio %d: %s%b\n" "${CYAN}" "$radio_count" "$radio" "${RESET}"
-                            printf "  Interface: %s\n" "$iface"
-                            [ -n "$hwmode" ] && printf "  Hardware/Mode: %s\n" "$hwmode"
-                            printf "  Band: %b%s%b\n" "${GREEN}" "$band" "${RESET}"
-                            [ -n "$mimo" ] && printf "  MIMO: %b%s%b\n" "${GREEN}" "$mimo" "${RESET}"
-                            [ -n "$channel" ] && printf "  Channel: %s\n" "$channel"
-                            printf "\n"
+                    # 2. Map Radio to Interface (ra0, rai0, etc.)
+                    iface=""
+                    for iface_sec in $(uci show wireless | grep "=wifi-iface" | cut -d. -f2 | cut -d= -f1); do
+                        if [ "$(uci -q get wireless.${iface_sec}.device)" = "$radio" ]; then
+                            iface=$(uci -q get wireless.${iface_sec}.ifname)
+                            break
                         fi
-                    fi
-                    
-                    if [ $radio_count -ge 2 ]; then
-                        command -v usleep >/dev/null 2>&1 && usleep 400000
-                    fi
-                done
-                fi
-
-                if [ $radio_count -eq 0 ]; then
-                   for iface in $(ls /sys/class/net/ 2>/dev/null | grep -E '^(ra|rai|rax|wlan)[0-9]*$' | grep -v '1$' | sort); do
-                        radio_count=$((radio_count + 1))
-                        
-                        # Determine band from interface name
-                        band="Unknown"
-                        case "$iface" in
-                           ra[0-9]*) band="2.4GHz" ;;
-                           rai[0-9]*|rax[0-9]*) band="5GHz" ;;
-                        esac
-                       
-                        # Find the wifi-iface section that uses this $iface
-                        iface_section=""
-                        for s in $(uci show wireless | grep '=wifi-iface' | cut -d. -f2 | cut -d= -f1 | grep -v '^guest'); do
-                           if uci get wireless.${s}.ifname 2>/dev/null | grep -q "^${iface}$"; then
-                              iface_section="$s"
-                              break
-                           fi
-                        done
-
-                        if [ -n "$iface_section" ]; then
-                           radio_section=$(uci get wireless.${iface_section}.device 2>/dev/null)
-                           if [ -n "$radio_section" ]; then
-                              htmode=$(uci get wireless.${radio_section}.htmode 2>/dev/null)
-                              channel=$(uci get wireless.${radio_section}.channel 2>/dev/null)
-                              if [ -n "$htmode" ]; then
-                                 hwmode="$htmode"
-                              else
-                                 info=$(iwinfo "$iface" info 2>/dev/null)
-                                 htmode=$(echo "$info" | grep "HT Mode:" | sed 's/.*HT Mode: //' | awk '{print $1}')
-                                 hwmode="${htmode:-Unknown}"
-                              fi
-
-                              uci_band=$(uci get wireless.${radio_section}.band 2>/dev/null)
-                                 case "$uci_band" in
-                                    2g) band="2.4GHz" ;;
-                                    5g) band="5GHz" ;;
-                                    6g) band="6GHz" ;;
-                                 esac
-                               
-                                 # MIMO from htmode
-                                 case "$htmode" in
-                                    *HE80*|*HE160*|*VHT80*|*VHT160*|*EHT160*|*EHT320*) mimo="4x4" ;;
-                                    *HE40*|*HE20*|*VHT40*|*VHT20*|*EHT80*) mimo="2x2" ;;
-                                    *) mimo="2x2" ;;
-                                 esac
-                           fi
-                        fi
-
-                        if [ -z "$channel" ] && command -v iwinfo >/dev/null 2>&1; then
-                           info=$(iwinfo "$iface" info 2>/dev/null)
-                           [ -n "$info" ] && channel=$(echo "$info" | grep "Channel:" | cut -d: -f2 | awk '{print $1}')
-                           [ -n "$info" ] && hwmode=$(echo "$info" | grep "Hardware:" | cut -d: -f2- | sed 's/^[[:space:]]*//')
-                           if echo "$info" | grep -q "2.4 GHz"; then band="2.4GHz"; fi
-                           if echo "$info" | grep -q "5 GHz"; then band="5GHz"; fi
-                        fi
-
-                        printf "%bRadio %d: %s%b\n" "${CYAN}" "$radio_count" "$iface" "${RESET}"
-                        printf "  Interface: %s\n" "$iface"
-                        [ -n "$hwmode" ] && printf "  Hardware/Mode: %s\n" "$hwmode"
-                        printf "  Band: %b%s%b\n" "${GREEN}" "$band" "${RESET}"
-                        [ -n "$mimo" ] && [ "$mimo" != "Unknown" ] && printf "  MIMO: %b%s%b\n" "${GREEN}" "$mimo" "${RESET}"
-                        [ -n "$channel" ] && printf "  Channel: %s\n" "$channel"
-                        printf "\n"
-                        
-                       if [ $radio_count -ge 2 ]; then
-                           command -v usleep >/dev/null 2>&1 && usleep 400000
-                       fi
                     done
-                fi
-                
-                if [ $radio_count -eq 0 ]; then
-                    printf "No wireless radios/interfaces detected.\n"
-                    printf "  (This device may use non-standard drivers. Try 'iwinfo' manually.)\n"
-                fi
+
+                    # 3. Real-time Channel Extraction (The Fix)
+                    current_chan="N/A"
+                    if [ -n "$iface" ] && command -v iwinfo >/dev/null 2>&1; then
+                        # This sed regex finds the word 'Channel' and grabs the number following it
+                        current_chan=$(iwinfo "$iface" info 2>/dev/null | sed -n 's/.*Channel: \([0-9]*\).*/\1/p')
+                    fi
+                    
+                    # Fallback to UCI config if live data is missing
+                    if [ -z "$current_chan" ]; then
+                        current_chan=$(uci -q get wireless.${radio}.channel)
+                    fi
+
+                    # 4. MIMO Logic
+                    mimo="2x2"
+                    case "$htmode" in
+                        *HE80*|*HE160*|*VHT80*|*VHT160*|*EHT160*|*EHT320*) mimo="4x4" ;;
+                        *HE40*|*HE20*|*VHT40*|*VHT20*|*EHT80*) mimo="2x2" ;;
+                    esac
+
+                    # 5. Band Display
+                    case "$band" in
+                        2g) band="2.4GHz" ;;
+                        5g) band="5GHz" ;;
+                        6g) band="6GHz" ;;
+                    esac
+
+                    printf "%bRadio %d: %s%b\n" "${CYAN}" "$radio_count" "$radio" "${RESET}"
+                    printf "  Interface: %b%s%b\n" "${GREEN}" "${iface:-N/A}" "${RESET}"
+                    printf "  Band:      %b%s%b\n" "${GREEN}" "$band" "${RESET}"
+                    printf "  HT Mode:   %b%s%b\n" "${GREEN}" "${htmode:-N/A}" "${RESET}"
+                    printf "  MIMO:      %b%s%b\n" "${GREEN}" "$mimo" "${RESET}"
+                    printf "  Channel:   %b%s%b\n" "${GREEN}" "${current_chan:-Auto}" "${RESET}"
+                    printf "\n"
+                done
                 ;;
         esac
         

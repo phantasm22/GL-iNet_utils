@@ -2,7 +2,7 @@
 # GL.iNet Router Toolkit
 # Author: phantasm22
 # License: GPL-3.0
-# Version: 2026-02-10
+# Version: 2026-02-11
 #
 # This script provides system utilities for GL.iNet routers including:
 # - Hardware information display with pagination
@@ -103,6 +103,35 @@ print_error() {
 
 print_warning() {
     printf "%b\n" "${YELLOW}⚠️  $1${RESET}"
+}
+
+# Helper: Secure Password Input with Asterisks
+get_password() {
+    local prompt="$1"
+    local password=""
+    local char=""
+    local backspace=$(printf '\177')
+    local ctrl_h=$(printf '\b')
+
+    printf "%s" "$prompt" >&2  
+    while :; do
+        read -s -n 1 char
+        if [ -z "$char" ] || [ "$char" = "$(printf '\r')" ]; then
+            break
+        fi
+
+        if [ "$char" = "$backspace" ] || [ "$char" = "$ctrl_h" ]; then
+            if [ ${#password} -gt 0 ]; then
+                password="${password%?}"
+                printf "\b \b" >&2
+            fi
+        else
+            password="$password$char"
+            printf "*" >&2
+        fi
+    done
+    printf "\n" >&2
+    printf "%s" "$password" 
 }
 
 # -----------------------------
@@ -982,6 +1011,269 @@ id: $ts"
     done
 }
 
+# AdGuardHome Direct Access Management
+
+show_agh_direct_help() {
+    clear
+    print_centered_header "Direct Access Help"
+    cat << 'HELPEOF'
+
+1. TOGGLE DIRECT ACCESS: 
+   - ON: Access AGH at http://192.168.8.1:3000 bypassing GL.iNet UI.
+   - OFF: Port 3000 redirects to Port 80 (Standard GL.iNet Login).
+
+2. WEB UI CREDENTIALS:
+   - Uses 'apache-utils' to generate a secure Bcrypt hash.
+   - This is necessary to prevent open access to your dashboard
+     once you bypass the GL.iNet login gatekeeper.
+
+3. REMOVE PASSWORD:
+   - Sets 'users: []' in the config.yaml. 
+   - Useful if you want the dashboard to be entirely open on LAN.
+
+NOTES:
+I.  BACKUPS: Automatically creates .backup.YYYYMMDDHHMMSS for
+    both the /etc/init.d script and the config.yaml.
+II. PERSISTENCE: GL.iNet firmware updates will overwrite the
+    init script. Simply run Option 1 again to restore access.
+
+HELPEOF
+    press_any_key
+}
+
+update_agh_credentials() {
+    clear
+    print_centered_header "Set Web UI Credentials"
+    if [ "$PASS_STATUS" = "✅" ]; then
+        print_warning "A password is already set. Proceeding will overwrite it.\n"
+    else 
+        print_warning "No password currently set. This will create a new username and password.\n"
+    fi
+    printf "Confirm to proceed? [y/N]: "
+    read -r confirm
+    printf "\n"
+    [ "$confirm" != "y" ] && [ "$confirm" != "Y" ] && return
+
+    # Dependency Check
+    if ! command -v htpasswd >/dev/null 2>&1; then
+        printf "🔍 Installing apache-utils...\n"
+        opkg update >/dev/null 2>&1 && opkg install apache-utils >/dev/null 2>&1
+        if ! command -v htpasswd >/dev/null 2>&1; then
+            print_error "Failed to install apache-utils. Cannot proceed."
+            press_any_key
+            return
+        fi
+    fi
+
+    # Input capture
+    printf "Enter Username: "
+    read -r user_name
+    while true; do
+        user_pass=$(get_password "Enter Password: ")
+
+        # Check for exit command to allow user to cancel out of password entry
+        case "$user_pass" in
+            [Ee][Xx][Ii][Tt]) 
+                print_warning "Operation cancelled by user."
+                return 
+                ;;
+        esac
+
+        # 2. Check for empty password immediately after the first entry
+        if [ -z "$user_pass" ]; then
+            print_error "Password cannot be empty."
+            continue
+        fi
+
+        # 3. Replace the confirmation read block
+        user_pass_conf=$(get_password "Confirm Password: ")
+
+        # 4. Final match check
+        if [ "$user_pass" = "$user_pass_conf" ]; then
+            printf "\n"
+            break
+        fi
+        printf "\n"
+        print_error "Passwords do not match. Try again or type \"exit\" to cancel."
+
+    done
+
+    BCRYPT_HASH=$(htpasswd -n -B -b "$user_name" "$user_pass" | cut -d: -f2)
+
+    # --- VALIDATION LOGIC ---
+    [ -z "$TIMESTAMP" ] && TIMESTAMP=$(date +%Y%m%d%H%M%S)
+    BACKUP_FILE="$AGH_CONF.backup.$TIMESTAMP"
+    cp "$AGH_CONF" "$BACKUP_FILE"
+    
+    if grep -q "users: \[\]" "$AGH_CONF"; then
+        # Case A: Empty list. Replace line with block.
+        sed -i "/users: \[\]/c\users:\n  - name: $user_name\n    password: \"$BCRYPT_HASH\"" "$AGH_CONF"
+    elif grep -q "^users:" "$AGH_CONF"; then
+        # Case B: Check if next two lines are - name and password
+        line_num=$(grep -n "^users:" "$AGH_CONF" | cut -d: -f1)
+        check_name=$(sed -n "$((line_num+1))p" "$AGH_CONF")
+        check_pass=$(sed -n "$((line_num+2))p" "$AGH_CONF")
+
+        if echo "$check_name" | grep -q " - name:" && echo "$check_pass" | grep -q "password:"; then
+            sed -i "$((line_num+1))s/- name: .*/- name: $user_name/" "$AGH_CONF"
+            sed -i "$((line_num+2))s|password: .*|password: \"$BCRYPT_HASH\"|" "$AGH_CONF"
+        else
+            print_error "Unexpected YAML structure detected below 'users:' line."
+            print_warning "Manual edit required to avoid corrupting config."
+            press_any_key; return
+        fi
+    else
+        print_error "Could not find 'users:' key in $AGH_CONF"
+        press_any_key; return
+    fi
+
+    # --- RESTART & RECOVERY ---
+    $AGH_INIT stop >/dev/null 2>&1
+    $AGH_INIT start >/dev/null 2>&1
+    sleep 2
+    if ! pidof AdGuardHome >/dev/null; then
+        print_error "Service failed to start! Rolling back..."
+        cp "$BACKUP_FILE" "$AGH_CONF"
+        $AGH_INIT start >/dev/null 2>&1
+        press_any_key
+    else
+        print_success "Credentials updated. Backup created: $(basename "$BACKUP_FILE")"
+        press_any_key
+    fi
+}
+
+manage_agh_direct_access() {
+    while true; do
+        clear
+        print_centered_header "AdGuardHome Direct Access"
+        
+        lan_ipaddr=$(uci get network.lan.ipaddr 2>/dev/null)
+        AGH_CONF=$(get_agh_config)
+        DIRECT_STATUS="❌"
+        grep -q -- "--glinet" "$AGH_INIT" || DIRECT_STATUS="✅"
+        
+        PASS_STATUS="✅"
+        grep -q "users: \[\]" "$AGH_CONF" && PASS_STATUS="❌"
+        
+        printf "    Direct Access: %b    |    Password: %b\n" "$DIRECT_STATUS" "$PASS_STATUS\n\n"
+        
+        printf "1️⃣  Toggle Direct Access (Standalone vs Integrated)\n"
+        printf "2️⃣  Add/Update Web UI Credentials (Username/Password)\n"
+        printf "3️⃣  Remove Web UI Password (Set to Open Access)\n"
+        printf "0️⃣  Main menu\n"
+        printf "❓ Help\n"
+        
+        printf "\nChoose [1-3/0/?]: "
+        read -r direct_choice
+        TIMESTAMP=$(date +%Y%m%d%H%M%S)
+
+        case $direct_choice in
+            1)
+                clear
+                if [ "$DIRECT_STATUS" = "❌" ]; then
+                    print_centered_header "Enable AdGuardHome Direct Access"
+                    print_warning "AdGuardHome direct access bypasses GL.iNet Web UI security.\n"
+                    print_warning "If no password is set, and you bypass setting a password, the UI will be ${BOLD}UNSECURED.${RESET}\n"
+                    printf "   Once enabled, you can access AdGuardHome Web UI at ${BOLD}http://$lan_ipaddr:3000\n\n${RESET}"
+                    printf "Proceed with enabling? [y/N]: "
+                else
+                    print_centered_header "Disable AdGuardHome Direct Access"
+                    print_warning "AdGuardHome direct Web UI access via http://$lan_ipaddr:3000 will be disabled.\n"
+                    print_warning "Any passwords set will remain but will be bypassed.\n"
+                    printf "    Once disabled, you can access the AdGuardHome Web UI at: ${BOLD}http://$lan_ipaddr/${RESET}\n\n"
+                    printf "Proceed with disabling? [y/N]: "
+                fi
+                read -r confirm
+                printf "\n"
+                [ "$confirm" != "y" ] && [ "$confirm" != "Y" ] && continue
+                
+                cp "$AGH_INIT" "$AGH_INIT.backup.$TIMESTAMP"
+                
+                if [ "$DIRECT_STATUS" = "✅" ]; then
+                    # Turning Direct Access OFF (Integrated Mode)
+                    sed -i 's/AdGuardHome /AdGuardHome --glinet /g' "$AGH_INIT"
+                    $AGH_INIT restart >/dev/null 2>&1
+                    print_success "Direct Access Disabled (Integrated Mode)"
+                    press_any_key
+                else
+                    # Turning Direct Access ON (Standalone Mode)
+                    sed -i 's/ --glinet//g' "$AGH_INIT"
+                    print_success "Direct Access Enabled (Standalone Mode)"
+                    
+                    if [ "$PASS_STATUS" = "❌" ]; then
+                        printf "\n"
+                        print_warning "No username/password has been set for AdGuardHome.\n"
+                        printf "Would you like to set one now? [Y/n]: "
+                        read -r set_pass
+                        printf "\n"
+                        if [ "$set_pass" != "n" ] && [ "$set_pass" != "N" ]; then
+                            update_agh_credentials && continue
+                        else
+                            $AGH_INIT restart >/dev/null 2>&1
+                            print_warning "AdGuardHome restarted with unsecured access."
+                            press_any_key
+                        fi
+                    else
+                        $AGH_INIT restart >/dev/null 2>&1
+                        print_success "AdGuardHome restarted successfully."
+                        press_any_key
+                    fi
+                fi
+                ;;
+
+            2) update_agh_credentials;;  
+
+            3)
+                clear
+                print_centered_header "Remove AdGuardHome Web UI Password"
+                if [ "$PASS_STATUS" = "❌" ]; then
+                    print_warning "No password currently exists."
+                    press_any_key; continue
+                fi
+                if [ "$DIRECT_STATUS" = "✅" ]; then
+                    print_warning "Remove credentials and enable OPEN ACCESS (Unsecured) to AdGuardHome Web UI?"
+                else
+                    print_warning "Remove credentials to AdGuardHome Web UI?"
+                fi
+                printf "\n"
+                printf "Confirm [y/N]: "
+                read -r confirm
+                printf "\n"
+                [ "$confirm" != "y" ] && [ "$confirm" != "Y" ] && continue
+
+                BACKUP_FILE="$AGH_CONF.backup.$TIMESTAMP"
+                cp "$AGH_CONF" "$BACKUP_FILE"
+                $AGH_INIT stop >/dev/null 2>&1
+
+                # Find users: block and replace with users: []
+                line_num=$(grep -n "^users:" "$AGH_CONF" | cut -d: -f1)
+                # Delete the next two lines (- name and password) then change users: to users: []
+                if ! grep -q "users: \[\]" "$AGH_CONF"; then
+                    sed -i "$((line_num+1)),$((line_num+2))d" "$AGH_CONF"
+                fi
+                sed -i "${line_num}s/users:.*/users: []/" "$AGH_CONF"
+
+                $AGH_INIT start >/dev/null 2>&1
+                sleep 2
+                if ! pidof AdGuardHome >/dev/null; then
+                    print_error "Service failed to start! Rolling back..."
+                    cp "$BACKUP_FILE" "$AGH_CONF"
+                    $AGH_INIT start >/dev/null 2>&1
+                    press_any_key
+                else
+                    print_success "Password removed. Service restarted."
+                    press_any_key
+                fi
+                ;;
+
+            0) return ;;
+            \?|h|H|❓) show_agh_direct_help ;;
+            *) print_error "Invalid option"; sleep 1 ;;
+        esac
+    done
+}
+
+
 # AdGuardHome Maintenance Hub
 
 show_agh_help() {
@@ -1198,7 +1490,8 @@ manage_AGH_backups() {
         printf "%s|%s\n" "$i" "$ts" >> "$map_file"
         i=$((i+1))
     done
-    printf "\n  Choose [1-$((i-1))/0]: "
+    printf "\n  [#] To Restore | [0] Cancel\n\n"
+    printf "  Choose [1-$((i-1))/0]: "
     read -r b_choice
     printf "\n"
     [ -z "$b_choice" ] || [ "$b_choice" = "0" ] && return
@@ -1209,7 +1502,7 @@ manage_AGH_backups() {
     local fix_cfg="Y"; local fix_bin="N"; local fix_ini="N"
     while true; do
         clear
-        print_centered_header "Pick what to fix: $selected_ts"
+        print_centered_header "Select items to restore from: $selected_ts"
         printf "  1. [ %s ] Configuration Settings\n" "$fix_cfg"
         printf "  2. [ %s ] App Binary (AdGuardHome)\n" "$fix_bin"
         printf "  3. [ %s ] Startup Script (init.d)\n\n" "$fix_ini"
@@ -1222,12 +1515,20 @@ manage_AGH_backups() {
             2) [ "$fix_bin" = "Y" ] && fix_bin="N" || fix_bin="Y" ;;
             3) [ "$fix_ini" = "Y" ] && fix_ini="N" || fix_ini="Y" ;;
             c) 
+                if [ "$fix_cfg" = "N" ] && [ "$fix_bin" = "N" ] && [ "$fix_ini" = "N" ]; then
+                    printf "\n"
+                    print_error "Nothing selected to restore. Select an option or 0 to cancel."
+                    press_any_key
+                    continue
+                fi
+                
                 printf "\nApplying Restore...\n"
                 /etc/init.d/adguardhome stop >/dev/null 2>&1
                 [ "$fix_cfg" = "Y" ] && cp "/etc/AdGuardHome/config.yaml.backup.$selected_ts" "/etc/AdGuardHome/config.yaml"
                 [ "$fix_bin" = "Y" ] && cp "/usr/bin/AdGuardHome.backup.$selected_ts" "/usr/bin/AdGuardHome"
                 [ "$fix_ini" = "Y" ] && cp "/etc/init.d/adguardhome.backup.$selected_ts" "/etc/init.d/adguardhome"
                 /etc/init.d/adguardhome start >/dev/null 2>&1
+                printf "\n"
                 print_success "Restore complete!"; press_any_key; return ;;
             0) return ;;
             *)
@@ -1868,13 +2169,14 @@ show_menu() {
         printf "2️⃣  Manage AdGuardHome UI Updates\n"
         printf "3️⃣  Manage AdGuardHome Storage\n"
         printf "4️⃣  Manage AdGuardHome Lists\n"
-        printf "5️⃣  AdGuardHome Maintenance Hub\n"
-        printf "6️⃣  Manage Zram Swap\n"
-        printf "7️⃣  System Benchmarks (CPU & Disk)\n"
-        printf "8️⃣  View System Configuration (UCI)\n"
-        printf "9️⃣  Check for Update\n"
+        printf "5️⃣  Manage AdGuardHome Direct Access\n"
+        printf "6️⃣  AdGuardHome Maintenance Hub\n"
+        printf "7️⃣  Manage Zram Swap\n"
+        printf "8️⃣  System Benchmarks (CPU & Disk)\n"
+        printf "9️⃣  View System Configuration (UCI)\n"
+        printf "🔟 Check for Update\n"
         printf "0️⃣  Exit\n"
-        printf "\nChoose [1-8/0]: "
+        printf "\nChoose [1-10/0]: "
         read opt
         
         case $opt in
@@ -1882,11 +2184,12 @@ show_menu() {
             2) manage_agh_ui_updates ;;
             3) manage_agh_storage ;;
             4) manage_agh_lists ;;
-            5) agh_maintenance_hub;;
-            6) manage_zram ;;
-            7) benchmark_system ;;
-            8) view_uci_config ;;
-            9) check_self_update "$@"; press_any_key ;;
+            5) manage_agh_direct_access ;;
+            6) agh_maintenance_hub;;
+            7) manage_zram ;;
+            8) benchmark_system ;;
+            9) view_uci_config ;;
+            10) check_self_update "$@"; press_any_key ;;
             0) clear; printf "\n%b\n\n" "${GREEN}✅ Thanks for using GL.iNet Toolkit!${RESET}"; exit 0 ;;
             *) print_error "Invalid option"; sleep 1 ;;
         esac

@@ -1869,7 +1869,7 @@ show_menu() {
         printf "2️⃣  Manage AdGuardHome UI Updates\n"
         printf "3️⃣  Manage AdGuardHome Storage\n"
         printf "4️⃣  Manage AdGuardHome Lists\n"
-        printf "5️⃣  Backup/Restore AdGuardHome\n"
+        printf "5️⃣  AdGuardHome Maintenance Hub\n"
         printf "6️⃣  Manage Zram Swap\n"
         printf "7️⃣  System Benchmarks (CPU & Disk)\n"
         printf "8️⃣  View System Configuration (UCI)\n"

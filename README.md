@@ -20,6 +20,7 @@
 
 - 🖥️ **Hardware Information** – Detailed system, CPU, memory, storage, crypto acceleration, network & wireless info (paged navigation)
 - ⚙️ **AdGuardHome Management** – Enable/disable UI auto-updates, install/remove custom blocklists & allowlists
+- ⚙️ **AdGuardHome Maintenance** – A dedicated hub to manage service status, create/restore backups, monitor hardware-specific storage limits, and view live logs.
 - 💾 **Zram Swap** – Install, enable, disable or uninstall compressed RAM swap (great for low-RAM models)
 - 📊 **Benchmarks** – CPU stress test (stress-ng), OpenSSL speed, disk I/O read/write performance
 - 📋 **UCI Config Viewer** – View wireless SSIDs/passwords, network, VPN, system, GoodCloud settings safely
@@ -58,14 +59,16 @@ When launched, the script presents an interactive menu system.
 Options may vary as new utilities are added, but generally include:
 
 ```
-1️⃣ Show Hardware Information
-2️⃣ Manage AdGuardHome
-3️⃣ Manage AdGuardHome Lists
-4️⃣ Manage Zram Swap
-5️⃣ System Benchmarks (CPU & Disk)
-6️⃣ View System Configuration (UCI)
-7️⃣ Check for Update
-8️⃣ Exit
+1️⃣  Show Hardware Information
+2️⃣  Manage AdGuardHome UI Updates
+3️⃣  Manage AdGuardHome Storage
+4️⃣  Manage AdGuardHome Lists
+5️⃣  Backup/Restore AdGuardHome
+6️⃣  Manage Zram Swap
+7️⃣  System Benchmarks (CPU & Disk)
+8️⃣  View System Configuration (UCI)
+9️⃣  Check for Update
+0️⃣  Exit
 ```
 
 Most sections include built-in help text and confirmation prompts for safety.

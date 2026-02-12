@@ -246,7 +246,7 @@ show_hardware_info() {
     while true; do
         clear
         print_centered_header "Hardware Information"
-        
+        printf "──────────────────────────────────────────────────────────────────\n"
         case $page in
             1)
                 printf "%b%bPage 1 of $total_pages: System Overview%b\n\n" "${BOLD}" "${CYAN}" "${RESET}"
@@ -439,7 +439,8 @@ show_hardware_info() {
                 ;;
         esac
         
-        printf "\n[B]ack | "
+        printf "──────────────────────────────────────────────────────────────────\n"
+        printf "[B] Previous   "
         i=1
         while [ $i -le $total_pages ]; do
             if [ $i -eq $page ]; then
@@ -449,7 +450,7 @@ show_hardware_info() {
             fi
             i=$((i + 1))
         done
-        printf "| [N]ext | [M]ain menu\n"
+        printf "  [N] Next   [0] Main menu  "
         
         nav_choice=$(read_single_char)
         
@@ -461,7 +462,7 @@ show_hardware_info() {
                     page=$nav_choice
                 fi
                 ;;
-            m|M) return ;;
+            m|M|0) return ;;
         esac
     done
 }
@@ -507,7 +508,8 @@ In this menu you can:
 2. Disable UI Updates (add --no-check-update flag + restart AdGuardHome)
 3. Return to main menu
 
-Note: Changing this setting restarts AdGuardHome automatically. Your filtering rules and stats are preserved.
+Note: Changing this setting restarts AdGuardHome automatically if already started. 
+      Your filtering rules and stats are preserved.
 HELPEOF
     
     press_any_key
@@ -517,18 +519,16 @@ manage_agh_ui_updates() {
     while true; do
         clear
         print_centered_header "AdGuardHome UI Updates Management"
-        
-        if ! is_agh_running; then
-            print_error "AdGuardHome is not running"
-            printf "\n"
-            press_any_key
-            return
-        fi
-        
+
         agh_pid=$(pidof AdGuardHome)
+
         printf "%b\n" "${CYAN}Current Status:${RESET}"
-        printf "  Running: %bYES%b (PID: %s)\n" "${GREEN}" "${RESET}" "$agh_pid"
-        
+        if [ -z "$agh_pid" ]; then
+            printf "  Running: ❌\n"
+        else
+            printf "  Running: ✅ (PID: %s)\n" "$agh_pid"
+        fi
+
         if grep -q -- "--no-check-update" "$AGH_INIT"; then
             printf "  UI Updates: %bDISABLED%b\n\n" "${RED}" "${RESET}"
         else
@@ -546,14 +546,16 @@ manage_agh_ui_updates() {
         case $agh_choice in
             1)
                 if grep -q -- "--no-check-update" "$AGH_INIT"; then
-                    sed -i 's/ --no-check-update//g' "$AGH_INIT"
+                    sed -i 's/--no-check-update//g; s/  / /g' "$AGH_INIT"
                     print_success "UI updates enabled in AdGuardHome"
                     
-                    /etc/init.d/adguardhome restart >/dev/null 2>&1
-                    if [ $? -eq 0 ]; then
-                        print_success "AdGuardHome restarted successfully"
-                    else
-                        print_error "Failed to restart AdGuardHome"
+                    if is_agh_running; then    
+                        /etc/init.d/adguardhome restart >/dev/null 2>&1
+                        if [ $? -eq 0 ]; then
+                            print_success "AdGuardHome restarted successfully"
+                        else
+                            print_error "Failed to restart AdGuardHome"
+                        fi
                     fi
                 else
                     print_warning "UI updates are already enabled"
@@ -565,11 +567,13 @@ manage_agh_ui_updates() {
                     sed -i '/procd_set_param command/ s/ -c/ --no-check-update -c/' "$AGH_INIT"
                     print_success "UI updates disabled in AdGuardHome"
                     
-                    /etc/init.d/adguardhome restart >/dev/null 2>&1
-                    if [ $? -eq 0 ]; then
-                        print_success "AdGuardHome restarted successfully"
-                    else
-                        print_error "Failed to restart AdGuardHome"
+                    if is_agh_running; then    
+                        /etc/init.d/adguardhome restart >/dev/null 2>&1
+                        if [ $? -eq 0 ]; then
+                            print_success "AdGuardHome restarted successfully"
+                        else
+                            print_error "Failed to restart AdGuardHome"
+                        fi
                     fi
                 else
                     print_warning "UI updates are already disabled"
@@ -630,14 +634,7 @@ manage_agh_storage() {
     while true; do
         clear
         print_centered_header "AdGuardHome Storage Management"
-        
-        if ! is_agh_running; then
-            print_error "AdGuardHome is not running"
-            printf "\n"
-            press_any_key
-            return
-        fi
-        
+
         AGH_WORKDIR=$(get_agh_workdir)
         if [ -z "$AGH_WORKDIR" ]; then
             print_error "Could not find AdGuardHome working directory"
@@ -649,22 +646,22 @@ manage_agh_storage() {
         printf "%b\n" "${CYAN}Current Storage Status:${RESET}"
         printf "Working Directory: %b%s%b\n\n" "${GREEN}" "$AGH_WORKDIR" "${RESET}"
         
-        if [ -d "$AGH_WORKDIR/data/filters" ]; then
-            printf "%b\n" "${CYAN}Filters Directory:${RESET}"
-            df -h "$AGH_WORKDIR/data/filters" 2>/dev/null | tail -1 | awk '{printf "  Total: %s | Used: %s | Free: %s\n", $2, $3, $4}'
-        fi
-        
-        if [ -d "$AGH_WORKDIR/data" ]; then
-            printf "\n%b\n" "${CYAN}Data Directory:${RESET}"
+         if [ -d "$AGH_WORKDIR/data" ]; then
+            printf "%b\n" "${CYAN}$AGH_WORKDIR/data Directory:${RESET}"
             df -h "$AGH_WORKDIR/data" 2>/dev/null | tail -1 | awk '{printf "  Total: %s | Used: %s | Free: %s\n", $2, $3, $4}'
         fi
+        
+        if [ -d "$AGH_WORKDIR/data/filters" ]; then
+            printf "\n%b\n" "${CYAN}$AGH_WORKDIR/data/filters Directory:${RESET}"
+            df -h "$AGH_WORKDIR/data/filters" 2>/dev/null | tail -1 | awk '{printf "  Total: %s | Used: %s | Free: %s\n", $2, $3, $4}'
+        fi     
         
         limit_active=0
         if grep -q "mount_filter_img" "$AGH_INIT" 2>/dev/null && ! grep -q "^[[:space:]]*#.*mount_filter_img" "$AGH_INIT" 2>/dev/null; then
             limit_active=1
-            printf "\n  Filter Size Limit: %bACTIVE (10MB)%b\n" "${YELLOW}" "${RESET}"
+            printf "  Filter Size Limit: %bACTIVE (10MB)%b\n" "${YELLOW}" "${RESET}"
         else
-            printf "\n  Filter Size Limit: %bINACTIVE%b\n" "${GREEN}" "${RESET}"
+            printf "  Filter Size Limit: %bINACTIVE%b\n" "${GREEN}" "${RESET}"
         fi
         
         printf "\n1️⃣  Remove Filter Size Limitation\n"
@@ -692,8 +689,8 @@ and instability on 512MB devices when filters are big or many are enabled.
 WARNEOF
                 
                 if ! swapon -s 2>/dev/null | grep -q zram; then
-                    printf "\n%b\n" "${YELLOW}⚠️  WARNING: Zram swap is NOT enabled!${RESET}"
-                    printf "%b\n\n" "${YELLOW}Strongly recommended: Enable zram swap first (in menu option 4)${RESET}"
+                    print_warning "WARNING: Zram swap is NOT enabled!"
+                    printf "%b\n\n" "${YELLOW}Strongly recommended: Enable zram swap first${RESET}"
                     printf "%b\n" "${YELLOW}→ it gives fast compressed swap in RAM and protects flash.${RESET}"
                 fi
                 
@@ -705,8 +702,13 @@ WARNEOF
                     continue
                 fi
                 
-                /etc/init.d/adguardhome stop >/dev/null 2>&1
-                
+                if is_agh_running; then
+                    agh_pid=$(pidof AdGuardHome)
+                    /etc/init.d/adguardhome stop >/dev/null 2>&1
+                else
+                    agh_pid=""
+                fi
+
                 loop_dev=$(mount | grep "$AGH_WORKDIR/data/filters" | awk '{print $1}')
                 if [ -n "$loop_dev" ]; then
                     umount "$loop_dev" 2>/dev/null
@@ -718,15 +720,17 @@ WARNEOF
                     print_success "Removed data.img file"
                 fi
                 
-                sed -i '/mount_filter_img/s/^/# /' "$AGH_INIT"
+                sed -i '/^[[:space:]]*mount_filter_img/s/^/# /' "$AGH_INIT"
                 print_success "Disabled mount_filter_img in init script"
                 
-                /etc/init.d/adguardhome start >/dev/null 2>&1
-                if [ $? -eq 0 ]; then
-                    print_success "AdGuardHome restarted successfully"
-                    printf "\n%b\n" "${GREEN}✅ Filter size limit removed!${RESET}"
-                else
-                    print_error "Failed to restart AdGuardHome"
+                if [ -n "$agh_pid" ]; then
+                    /etc/init.d/adguardhome start >/dev/null 2>&1
+                    if [ $? -eq 0 ]; then
+                        print_success "AdGuardHome restarted successfully"
+                        print_success "Filter size limit removed!"
+                    else
+                        print_error "Failed to restart AdGuardHome"
+                    fi
                 fi
                 
                 press_any_key
@@ -745,17 +749,24 @@ WARNEOF
                     continue
                 fi
                 
-                /etc/init.d/adguardhome stop >/dev/null 2>&1
+                if is_agh_running; then
+                    agh_pid=$(pidof AdGuardHome)
+                    /etc/init.d/adguardhome stop >/dev/null 2>&1
+                else
+                    agh_pid=""
+                fi
                 
-                sed -i '/mount_filter_img/s/^# //' "$AGH_INIT"
+                sed -i '/mount_filter_img/s/^[[:space:]]*#[[:space:]]*//' "$AGH_INIT"
                 print_success "Re-enabled mount_filter_img in init script"
                 
-                /etc/init.d/adguardhome start >/dev/null 2>&1
-                if [ $? -eq 0 ]; then
-                    print_success "AdGuardHome restarted successfully"
-                    printf "\n%b\n" "${GREEN}✅ Filter size limit re-enabled!${RESET}"
-                else
-                    print_error "Failed to restart AdGuardHome"
+                if [ -n "$agh_pid" ]; then
+                    /etc/init.d/adguardhome start >/dev/null 2>&1
+                    if [ $? -eq 0 ]; then
+                        print_success "AdGuardHome restarted successfully"
+                        printf "\n%b\n" "${GREEN}✅ Filter size limit removed!${RESET}"
+                    else
+                        print_error "Failed to restart AdGuardHome"
+                    fi
                 fi
                 
                 press_any_key
@@ -783,23 +794,34 @@ show_agh_lists_help() {
     
     cat << 'HELPEOF'
 What are these lists?
-─────────────────────
-This option installs custom DNS filter lists for AdGuardHome to enhance ad blocking and streaming compatibility:
+────────────────────────────────────────────────────────────────────────
+This option installs custom DNS filter lists for AdGuardHome to enhance 
+ad blocking and streaming compatibility:
 
-- **Phantasm22's Blocklist** (from https://github.com/phantasm22/AdGuardHome-Lists/blocklist.txt):  
-  Blocks all Amazon Echo Show ads. It's derived from HaGeZi's Pro++ Blocklist for broad ad/tracking protection, curated for optimal performance on GL.iNet routers and Echo devices. Key features: Auto-updates, GPL-3.0 licensed, maintained by phantasm22 (last update Nov 2025).
+- **Phantasm22's Blocklist**:
+  Blocks Amazon Echo Show ads. Derived from HaGeZi's Pro++ for broad 
+  protection, curated for GL.iNet performance. (Auto-updates, GPL-3.0).
+  URL: https://github.com/phantasm22/AdGuardHome-Lists/blocklist.txt
 
-- **Phantasm22's Allow List** (from https://github.com/phantasm22/AdGuardHome-Lists/allowlist.txt):  
-  Unblocks essential domains for video streaming and apps like Roku, Apple TV, NBC Sports, Peacock, Hulu, Disney+, YouTube, Prime Video, HBO Max, Philo, and Tubi. Prevents false positives that could break functionality.
+- **Phantasm22's Allow List**:
+  Unblocks domains for Roku, Apple TV, NBC, Peacock, Hulu, Disney+, 
+  YouTube, Prime, Max, and more. Prevents false positives.
+  URL: https://github.com/phantasm22/AdGuardHome-Lists/allowlist.txt
 
-- **HaGeZi's Pro++ Blocklist**:  
-  An aggressive DNS blocklist that sweeps away ads, affiliates, tracking, metrics, telemetry, phishing, malware, scams, fake sites, and more. It's a "maximum protection" version of HaGeZi's Multi series (Light/Normal/Pro/Pro++/Ultimate), with 229,928+ entries (as of 2024 data). More strict than Pro, it may include rare false positives limiting some app/website functions—best for experienced users who can whitelist as needed.
+- **HaGeZi's Pro++ Blocklist**:
+  Aggressive protection against ads, tracking, phishing, and malware.
+  Part of the Multi series (230k+ entries). Strict protection; 
+  best for users comfortable whitelisting if rare breaks occur.
 
 Why HaGeZi's Pro++ as the default base?
-────────────────────────────────────────
-It's actively maintained, provides comprehensive all-round protection, and strikes a strong balance between aggressive blocking and usability. Facts: Users report it blocks ~2x more than alternatives like OISD (e.g., 15%+ network-wide blocks) with minimal false positives; praised on Reddit, NextDNS, and Pi-hole forums for privacy gains without excessive whitelisting. Chosen here as the foundation for Phantasm22's list to ensure robust ad-free experience on routers.
+────────────────────────────────────────────────────────────────────────
+It provides comprehensive protection and balances aggressive blocking 
+with usability. Users report ~2x more blocks than alternatives like 
+OISD with minimal false positives. It is highly regarded on Reddit, 
+NextDNS, and Pi-hole forums for privacy gains.
 
-These lists auto-update in AdGuardHome. Install only if you want enhanced blocking—monitor for any rare streaming breaks and whitelist via AdGuardHome UI.
+These lists auto-update in AdGuardHome. Install for enhanced blocking—
+monitor for streaming breaks and whitelist via the AdGuardHome UI.
 HELPEOF
     
     press_any_key
@@ -877,7 +899,7 @@ EOF
                 printf "%-4s %-12s %-50s %-20s\n" "$s_box" "$type" "$label" "$s_txt"
             done < "$LISTS_DATA"
             printf "──────────────────────────────────────────────────────────────────────────────────────────\n"
-            printf "[A] All   [N] None   [T#] Toggle   [C] Confirm   [0] Back\n"
+            printf "[A] All   [N] None   [T#] Toggle   [C] Confirm   [0] Cancel   [?] Help\n"
             printf "Enter command: "
             read -r input
 
@@ -1005,6 +1027,8 @@ id: $ts"
                     fi
                     press_any_key; rm -f "$LISTS_DATA"; break 1
                     ;;
+                \?|h|H|❓)
+                    show_agh_lists_help ;;
                 0) rm -f "$LISTS_DATA"; return ;;
             esac
         done
@@ -1146,7 +1170,6 @@ manage_agh_direct_access() {
     while true; do
         clear
         print_centered_header "AdGuardHome Direct Access"
-        
         lan_ipaddr=$(uci get network.lan.ipaddr 2>/dev/null)
         AGH_CONF=$(get_agh_config)
         DIRECT_STATUS="❌"
@@ -1155,8 +1178,7 @@ manage_agh_direct_access() {
         PASS_STATUS="✅"
         grep -q "users: \[\]" "$AGH_CONF" && PASS_STATUS="❌"
         
-        printf "    Direct Access: %b    |    Password: %b\n" "$DIRECT_STATUS" "$PASS_STATUS\n\n"
-        
+        printf "    Direct Access: %b    |    Password: %b\n" "$DIRECT_STATUS" "$PASS_STATUS\n"
         printf "1️⃣  Toggle Direct Access (Standalone vs Integrated)\n"
         printf "2️⃣  Add/Update Web UI Credentials (Username/Password)\n"
         printf "3️⃣  Remove Web UI Password (Set to Open Access)\n"
@@ -1280,37 +1302,201 @@ show_agh_help() {
     clear
     print_centered_header "AdGuardHome Hub - Help"
     cat << 'HELPEOF'
+1. SERVICE MGMT: Toggles the UCI state and signals the init.d script
+   to transition the daemon's runtime state (On/Off/Restart).
 
-1. SERVICE MGMT: Toggles the UCI configuration state and signals
-   the init.d script to transition the daemon's runtime state.
+2. ATOMIC BACKUP: Generates a timestamped synchronization point for
+   the config (YAML), binary (App), and init.d startup script.
 
-2. ATOMIC BACKUP: Generates a timestamped synchronization point
-   for the config (YAML), binary (App), and init.d (Startup).
+3. SELECTIVE RESTORE: Allows modular injection of components. Ideal
+   for fixing malformed YAML without rolling back the core binary.
 
-3. SELECTIVE RESTORE: Allows modular injection of historical
-   components. Ideal for reverting malformed YAML configurations
-   without downgrading the core filtering binary.
+4. MANAGE BACKUPS: Enter the cleanup utility to select and delete
+   old or redundant backup sets to free up system storage.
 
-4. FACTORY RESET: Reconstructs the environment using the read-only
+5. FACTORY RESET: Reconstructs the environment using the read-only
    firmware defaults located in the /rom partition.
 
-5. CACHE PURGE: Flushes the /data/filters directory to resolve
+6. CACHE PURGE: Flushes the /data/filters directory to resolve
    checksum mismatches or corrupted blocklist indices.
 
-6. LOG STREAM: Utilizes 'logread' to intercept the circular buffer
-   for real-time diagnostic observation of DNS intersections.
+7. LOG STREAM: Uses 'logread' to intercept the circular buffer for
+   real-time diagnostic observation of DNS intersections.
 
 NOTES:
-I.  RULE DISCREPANCY: 'Raw' counts include all text lines from
-    filter sources. The WebUI displays a lower 'Optimized' count
-    after mandatory deduplication and syntax validation.
-II. VOLATILE MEMORY: Query logs are frequently mapped to /tmp.
-    Check 'Query Logs Free' to ensure the RAM partition is not
-    approaching exhaustion, which triggers kernel instability.
-    
+- RULE DISCREPANCY: 'Raw' counts include all text lines. The WebUI 
+  displays a lower 'Optimized' count after deduplication.
+- DISK USAGE: Query logs are often in /tmp (RAM). If 'Free Space' 
+  is low, the system may become unstable or crash.
 HELPEOF
-    
     press_any_key
+}
+
+manage_AGH_backups() {
+    local backups=$(ls /etc/AdGuardHome/config.yaml.backup.* 2>/dev/null | sed 's/.*\.backup\.//' | sort -r)
+    [ -z "$backups" ] && { print_error "No backups found."; sleep 2; return; }
+
+    clear
+    print_centered_header "Pick a Backup Date"
+    printf "  ────────────────────────────────────────────────────────────\n"
+    printf "  %-3s  %-18s  %-5s  %-5s  %-5s\n" "#" "Date / Time" "Conf" "Bin" "Init"
+    printf "\n"
+
+    local i=1
+    local map_file="/tmp/agh_bk_map"
+    > "$map_file"
+
+    for ts in $backups; do
+        local p_date="${ts:0:4}-${ts:4:2}-${ts:6:2} ${ts:8:2}:${ts:10:2}"
+        local has_bin="[N]"; [ -f "/usr/bin/AdGuardHome.backup.$ts" ] && has_bin="[Y]"
+        local has_ini="[N]"; [ -f "/etc/init.d/adguardhome.backup.$ts" ] && has_ini="[Y]"
+
+        printf "  %-3s  %-18s  %-5s  %-5s  %-5s\n" "$i." "$p_date" "[Y]" "$has_bin" "$has_ini"
+        printf "%s|%s\n" "$i" "$ts" >> "$map_file"
+        i=$((i+1))
+    done
+    printf "  ────────────────────────────────────────────────────────────\n"
+    printf "  [#] To Restore   [0] Cancel\n"
+    printf "  Choose [1-$((i-1))/0]: "
+    read -r b_choice
+    printf "\n"
+    [ -z "$b_choice" ] || [ "$b_choice" = "0" ] && return
+
+    local selected_ts=$(grep "^$b_choice|" "$map_file" | cut -d'|' -f2)
+    [ -z "$selected_ts" ] && return
+
+    local fix_cfg="Y"; local fix_bin="N"; local fix_ini="N"
+    while true; do
+        clear
+        print_centered_header "Select items to restore from: $selected_ts"
+        printf "────────────────────────────────────────────────────────────\n"
+        printf "1. [ %s ] Configuration Settings\n" "$fix_cfg"
+        printf "2. [ %s ] App Binary (AdGuardHome)\n" "$fix_bin"
+        printf "3. [ %s ] Startup Script (init.d)\n\n" "$fix_ini"
+        printf "────────────────────────────────────────────────────────────\n"
+        printf "[#] Toggle Restore   [C] Confirm   [0] Cancel\n"
+        printf "Choose [1-3/C/0]: "
+        local s_choice=$(read_single_char | tr '[:upper:]' '[:lower:]')
+        printf "\n"
+        case "$s_choice" in
+            1) [ "$fix_cfg" = "Y" ] && fix_cfg="N" || fix_cfg="Y" ;;
+            2) [ "$fix_bin" = "Y" ] && fix_bin="N" || fix_bin="Y" ;;
+            3) [ "$fix_ini" = "Y" ] && fix_ini="N" || fix_ini="Y" ;;
+            c) 
+                if [ "$fix_cfg" = "N" ] && [ "$fix_bin" = "N" ] && [ "$fix_ini" = "N" ]; then
+                    printf "\n"
+                    print_error "Nothing selected to restore. Select an option or 0 to cancel."
+                    press_any_key
+                    continue
+                fi
+                
+                printf "\nApplying Restore...\n"
+                /etc/init.d/adguardhome stop >/dev/null 2>&1
+                [ "$fix_cfg" = "Y" ] && cp "/etc/AdGuardHome/config.yaml.backup.$selected_ts" "/etc/AdGuardHome/config.yaml"
+                [ "$fix_bin" = "Y" ] && cp "/usr/bin/AdGuardHome.backup.$selected_ts" "/usr/bin/AdGuardHome"
+                [ "$fix_ini" = "Y" ] && cp "/etc/init.d/adguardhome.backup.$selected_ts" "/etc/init.d/adguardhome"
+                /etc/init.d/adguardhome start >/dev/null 2>&1
+                printf "\n"
+                print_success "Restore complete!"; press_any_key; return ;;
+            0) return ;;
+            *)
+                print_error "Invalid option"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+delete_AGH_backups() {
+    local map_file="/tmp/agh_del_map"
+    [ -f "$map_file" ] && rm -f "$map_file"
+    while true; do
+        local backups=$(ls /etc/AdGuardHome/config.yaml.backup.* 2>/dev/null | sed 's/.*\.backup\.//' | sort -r)
+        [ -z "$backups" ] && { print_error "No backups found."; sleep 2; return; }
+
+        # Initialize map file if it doesn't exist (Index|Timestamp|Selected)
+        if [ ! -f "$map_file" ]; then
+            local i=1
+            for ts in $backups; do
+                echo "$i|$ts|0" >> "$map_file"
+                i=$((i+1))
+            done
+        fi
+
+        clear
+        print_centered_header "AdGuardHome Backup Cleanup"
+        printf "%-4s  %-4s  %-18s  %-5s  %-5s  %-5s  %-6s\n" "Sel" "Idx" "Date / Time" "Conf" "Bin" "Init" "Size"
+        printf "──────────────────────────────────────────────────────────────\n"
+
+        while IFS='|' read -r idx ts sel; do
+            local p_date="${ts:0:4}-${ts:4:2}-${ts:6:2} ${ts:8:2}:${ts:10:2}"
+            local s_box="[ ]"; [ "$sel" -eq 1 ] && s_box="[✓] "
+            
+            # Check presence of components
+            local c="[Y]"; [ ! -f "/etc/AdGuardHome/config.yaml.backup.$ts" ] && c="[N]"
+            local b="[Y]"; [ ! -f "/usr/bin/AdGuardHome.backup.$ts" ] && b="[N]"
+            local n="[Y]"; [ ! -f "/etc/init.d/adguardhome.backup.$ts" ] && n="[N]"
+
+            # Calculate total size for this timestamp
+            local ts_bytes=0
+            for f in "/etc/AdGuardHome/config.yaml.backup.$ts" "/usr/bin/AdGuardHome.backup.$ts" "/etc/init.d/adguardhome.backup.$ts"; do
+                [ -f "$f" ] && ts_bytes=$((ts_bytes + $(ls -nl "$f" | awk '{print $5}')))
+            done
+            
+            # Convert to human readable
+            local p_size="0B"
+            if [ "$ts_bytes" -ge 1048576 ]; then
+                p_size=$(awk "BEGIN {printf \"%.1fM\", $ts_bytes/1048576}")
+            elif [ "$ts_bytes" -ge 1024 ]; then
+                p_size=$(awk "BEGIN {printf \"%.1fK\", $ts_bytes/1024}")
+            else
+                p_size="${ts_bytes}B"
+            fi
+
+            printf "%-4s  %-4s  %-18s  %-5s  %-5s  %-5s  %-6s\n" "$s_box" "$idx." "$p_date" "$c" "$b" "$n" "$p_size"
+        done < "$map_file"
+
+        printf "──────────────────────────────────────────────────────────────\n"
+        printf "[A] All   [N] None   [T#] Toggle   [C] Confirm   [0] Cancel\n"
+        printf "Enter command: "
+        read -r input
+        local cmd=$(echo "$input" | tr '[:upper:]' '[:lower:]')
+
+        case "$cmd" in
+            a) sed -i 's/|0$/|1/' "$map_file" ;;
+            n) sed -i 's/|1$/|0/' "$map_file" ;;
+            t*) 
+                local t_idx="${cmd#t}"
+                if grep -q "^$t_idx|" "$map_file"; then
+                    local current_state=$(grep "^$t_idx|" "$map_file" | cut -d'|' -f3)
+                    local new_state=$((1 - current_state))
+                    sed -i "s/^$t_idx|.*|.*/$(grep "^$t_idx|" "$map_file" | cut -d'|' -f1-2)|$new_state/" "$map_file"
+                fi ;;
+            c)
+                if ! grep -q "|1$" "$map_file"; then
+                    printf "\n"
+                    print_error "No backups selected."; press_any_key ; continue
+                fi
+                printf "\n"
+                print_warning "Delete selected backups? [y/N]: "
+                if [ "$(read_single_char)" = "y" ]; then
+                    while IFS='|' read -r idx ts sel; do
+                        if [ "$sel" -eq 1 ]; then
+                            rm -f "/etc/AdGuardHome/config.yaml.backup.$ts"
+                            rm -f "/usr/bin/AdGuardHome.backup.$ts"
+                            rm -f "/etc/init.d/adguardhome.backup.$ts"
+                        fi
+                    done < "$map_file"
+                    printf "\n"
+                    print_success "Selected backups purged."
+                    press_any_key;
+                    rm -f "$map_file"
+                    return
+                fi ;;
+            0) rm -f "$map_file"; return ;;
+            *) print_error "Invalid command"; sleep 1 ;;
+        esac
+    done
 }
 
 agh_maintenance_hub() {
@@ -1382,28 +1568,48 @@ agh_maintenance_hub() {
             local qlog_u=$(awk "BEGIN {printf \"%.1fM\", $q_bytes/1048576}")
         fi
 
+        # Calculate total backup storage
+        local bk_bytes=0
+        for bk_dir in "/etc/AdGuardHome" "/usr/bin" "/etc/init.d"; do
+            # Sum up all files matching the .backup. pattern
+            local d_size=$(ls -nl $bk_dir/*backup.* 2>/dev/null | awk '{sum += $5} END {print sum}')
+            bk_bytes=$((bk_bytes + ${d_size:-0}))
+        done
+
+        # Convert bytes to human readable
+        local bk_total_u="0B"
+        if [ "$bk_bytes" -gt 0 ]; then
+            if [ "$bk_bytes" -lt 1048576 ]; then
+                bk_total_u=$(awk "BEGIN {printf \"%.1fK\", $bk_bytes/1024}")
+            else
+                bk_total_u=$(awk "BEGIN {printf \"%.1fM\", $bk_bytes/1048576}")
+            fi
+        fi
+
         # --- 2. RENDER DASHBOARD ---
         clear
         print_centered_header "AdGuardHome Maintenance Hub"
-        printf "  %-14s %-14s %-15s\n" "Running: $run_icon" "WebUI: $web_icon" "Backup: $bk_date"
+        printf "%-14s %-14s %-15s\n" "Running: $run_icon" "GL-WebUI: $web_icon" "Backup: $bk_date"
         printf "\n"
-        printf "  STATS:\n"
-        printf "  - Total Lists:       %s\n" "$list_count"
-        printf "  - Rules (Raw):       %s\n" "$cached_rules"
+        printf "STATS:\n"
+        printf "- Total Lists:       %s\n" "$list_count"
+        printf "- Rules (Raw):       %s\n" "$cached_rules"
         printf "\n"
-        printf "  DISK USAGE (Used/Free):\n"
-        printf "  - Filter Data:       %s / %s\n" "${filt_u:-0B}" "${filt_f:-N/A}"
-        printf "  - Query Logs:        %s / %s\n" "${qlog_u:-0B}" "${qlog_f:-N/A}"
+        printf "DISK USAGE (Used/Free):\n"
+        printf "- Filter Data:       %s / %s\n" "${filt_u:-0B}" "${filt_f:-N/A}"
+        printf "- Query Logs:        %s / %s\n" "${qlog_u:-0B}" "${qlog_f:-N/A}"
+        printf "- Backup Storage:    %s\n" "$bk_total_u"
         printf "\n"
-        printf "  1️⃣  Turn On / Off / Restart\n"
-        printf "  2️⃣  Save a New Backup\n"
-        printf "  3️⃣  Restore from a Backup (Pick what to fix)\n"
-        printf "  4️⃣  Reset to Factory Settings (Start Over)\n"
-        printf "  5️⃣  Clear Filter Cache (Fix Download Errors)\n"
-        printf "  6️⃣  Watch Live Logs (See what is happening)\n"
-        printf "  0️⃣  Back to Main Menu\n"
-        printf "  ❓ Help & Troubleshooting\n\n"
-        printf "  Choose [1-6/0/?]: "
+        printf "1️⃣  Enable / Disable / Restart\n"
+        printf "2️⃣  Save a New Backup\n"
+        printf "3️⃣  Restore from a Backup (Pick what to fix)\n"
+        printf "4️⃣  Manage Backups (Delete backup files)\n"
+        printf "5️⃣  Reset to Factory Settings (Start Over)\n"
+        printf "6️⃣  Clear Filter Cache (Fix Download Errors)\n"
+        printf "7️⃣  Watch Live Logs (See what is happening)\n"
+        printf "0️⃣  Main menu\n"
+        printf "❓ Help & Troubleshooting\n\n"
+        printf "Choose [1-6/0/?]: "
         read -r choice
         printf "\n" # Visual Break
 
@@ -1434,7 +1640,8 @@ agh_maintenance_hub() {
                print_success "Backup Created: $ts"
                press_any_key ;;
             3) manage_AGH_backups ;;
-            4) print_warning "Restore factory defaults from /rom? [y/N]: "
+            4) delete_AGH_backups ;;
+            5) print_warning "Restore factory defaults from /rom? [y/N]: "
                confirm=$(read_single_char | tr '[:upper:]' '[:lower:]')
                if [ "$confirm" = "y" ]; then
                    /etc/init.d/adguardhome stop >/dev/null 2>&1
@@ -1442,14 +1649,14 @@ agh_maintenance_hub() {
                    /etc/init.d/adguardhome start >/dev/null 2>&1; print_success "Factory reset complete."
                    press_any_key
                fi ;;
-            5) print_warning "Clear all cached filter files? [y/N]: "
+            6) print_warning "Clear all cached filter files? [y/N]: "
                confirm=$(read_single_char | tr '[:upper:]' '[:lower:]')
                if [ "$confirm" = "y" ]; then
                    rm -rf /etc/AdGuardHome/data/filters/*; cached_rules=""
                    /etc/init.d/adguardhome restart >/dev/null 2>&1; print_success "Filters Purged"
                    press_any_key
                fi ;;
-            6) clear
+            7) clear
                print_centered_header "AdGuardHome System Logs (Ctrl+C to exit)"
                sleep 2
                trap 'printf "\n\n" ; print_warning "Stopping log viewing..."' INT
@@ -1459,78 +1666,7 @@ agh_maintenance_hub() {
                press_any_key
                ;;
             0) break ;;
-            \?) show_agh_help;;
-            *)
-                print_error "Invalid option"
-                sleep 1
-                ;;
-        esac
-    done
-}
-
-manage_AGH_backups() {
-    local backups=$(ls /etc/AdGuardHome/config.yaml.backup.* 2>/dev/null | sed 's/.*\.backup\.//' | sort -r)
-    [ -z "$backups" ] && { print_error "No backups found."; sleep 2; return; }
-
-    clear
-    print_centered_header "Pick a Backup Date"
-    printf "  %-3s  %-18s  %-5s  %-5s  %-5s\n" "#" "Date / Time" "Conf" "Bin" "Init"
-    printf "\n"
-
-    local i=1
-    local map_file="/tmp/agh_bk_map"
-    > "$map_file"
-
-    for ts in $backups; do
-        local p_date="${ts:0:4}-${ts:4:2}-${ts:6:2} ${ts:8:2}:${ts:10:2}"
-        local has_bin="[N]"; [ -f "/usr/bin/AdGuardHome.backup.$ts" ] && has_bin="[Y]"
-        local has_ini="[N]"; [ -f "/etc/init.d/adguardhome.backup.$ts" ] && has_ini="[Y]"
-
-        printf "  %-3s  %-18s  %-5s  %-5s  %-5s\n" "$i." "$p_date" "[Y]" "$has_bin" "$has_ini"
-        printf "%s|%s\n" "$i" "$ts" >> "$map_file"
-        i=$((i+1))
-    done
-    printf "\n  [#] To Restore | [0] Cancel\n\n"
-    printf "  Choose [1-$((i-1))/0]: "
-    read -r b_choice
-    printf "\n"
-    [ -z "$b_choice" ] || [ "$b_choice" = "0" ] && return
-
-    local selected_ts=$(grep "^$b_choice|" "$map_file" | cut -d'|' -f2)
-    [ -z "$selected_ts" ] && return
-
-    local fix_cfg="Y"; local fix_bin="N"; local fix_ini="N"
-    while true; do
-        clear
-        print_centered_header "Select items to restore from: $selected_ts"
-        printf "  1. [ %s ] Configuration Settings\n" "$fix_cfg"
-        printf "  2. [ %s ] App Binary (AdGuardHome)\n" "$fix_bin"
-        printf "  3. [ %s ] Startup Script (init.d)\n\n" "$fix_ini"
-        printf "  [#] Toggle Restore | [C] Confirm | [0] Cancel\n\n"
-        printf "  Choose [1-3/C/0]: "
-        local s_choice=$(read_single_char | tr '[:upper:]' '[:lower:]')
-        printf "\n"
-        case "$s_choice" in
-            1) [ "$fix_cfg" = "Y" ] && fix_cfg="N" || fix_cfg="Y" ;;
-            2) [ "$fix_bin" = "Y" ] && fix_bin="N" || fix_bin="Y" ;;
-            3) [ "$fix_ini" = "Y" ] && fix_ini="N" || fix_ini="Y" ;;
-            c) 
-                if [ "$fix_cfg" = "N" ] && [ "$fix_bin" = "N" ] && [ "$fix_ini" = "N" ]; then
-                    printf "\n"
-                    print_error "Nothing selected to restore. Select an option or 0 to cancel."
-                    press_any_key
-                    continue
-                fi
-                
-                printf "\nApplying Restore...\n"
-                /etc/init.d/adguardhome stop >/dev/null 2>&1
-                [ "$fix_cfg" = "Y" ] && cp "/etc/AdGuardHome/config.yaml.backup.$selected_ts" "/etc/AdGuardHome/config.yaml"
-                [ "$fix_bin" = "Y" ] && cp "/usr/bin/AdGuardHome.backup.$selected_ts" "/usr/bin/AdGuardHome"
-                [ "$fix_ini" = "Y" ] && cp "/etc/init.d/adguardhome.backup.$selected_ts" "/etc/init.d/adguardhome"
-                /etc/init.d/adguardhome start >/dev/null 2>&1
-                printf "\n"
-                print_success "Restore complete!"; press_any_key; return ;;
-            0) return ;;
+            \?|h|H|❓) show_agh_help;;
             *)
                 print_error "Invalid option"
                 sleep 1
@@ -1682,7 +1818,7 @@ manage_zram() {
                 fi
                 press_any_key
                 ;;
-            \?|h|H)
+            \?|h|H|❓)
                 show_zram_help
                 ;;
             m|M|0)
@@ -1707,7 +1843,7 @@ benchmark_system() {
         printf "1️⃣  CPU Stress Test\n"
         printf "2️⃣  CPU Benchmark (OpenSSL)\n"
         printf "3️⃣  Disk I/O Benchmark\n"
-        printf "0️⃣  Back to main menu\n"
+        printf "0️⃣  Main menu\n"
         printf "\nChoose [1-4]: "
         read -r bench_choice
         printf "\n"
@@ -1860,7 +1996,7 @@ view_uci_config() {
         printf "3️⃣  VPN Configuration\n"
         printf "4️⃣  System Settings\n"
         printf "5️⃣  Cloud Services\n"
-        printf "0️⃣  Back to main menu\n"
+        printf "0️⃣  Main menu\n"
         printf "\nChoose [1-5/0]: "
         read -r config_choice
         printf "\n"

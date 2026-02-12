@@ -1598,7 +1598,7 @@ agh_maintenance_hub() {
         printf "DISK USAGE (Used/Free):\n"
         printf "- Filter Data:       %s / %s\n" "${filt_u:-0B}" "${filt_f:-N/A}"
         printf "- Query Logs:        %s / %s\n" "${qlog_u:-0B}" "${qlog_f:-N/A}"
-        printf "- Backup Storage:    %s\n" "$bk_total_u"
+        printf "- Backup Data:       %s\n" "$bk_total_u"
         printf "\n"
         printf "1️⃣  Enable / Disable / Restart\n"
         printf "2️⃣  Save a New Backup\n"

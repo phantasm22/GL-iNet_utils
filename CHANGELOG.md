@@ -4,6 +4,26 @@ All notable changes to the GL.iNet Utilities toolkit. Newest first. Versions
 match the `# Version:` line in the script — `YYYY-MM-DD`, or `YYYY-MM-DD_HH:MM`
 for multiple releases on the same day.
 
+## 2026-09-06
+- **Network Bandwidth Limiter — see and switch each network's interface.** A new **If-State** column
+  shows whether each network is UP or DOWN, and switched-off guest / IoT / VLAN networks now appear in
+  the list (they were hidden before) so you can bring them back up right from the limiter.
+- **Per-band Wi-Fi control for guest / IoT.** A network with more than one Wi-Fi band (2.4 / 5 / 6 GHz)
+  opens a grid where you pick exactly which bands to bring up or down — no longer all-or-nothing. The
+  network reads UP while any band is on, DOWN once they're all off.
+- **Bringing a network up or down is persistent** (like the GL admin toggle — it survives a reboot) and
+  re-applies that network's bandwidth limit automatically when it comes back up.
+- **VLAN subnets are now recognized** as VLANs, so a custom VLAN can be toggled and shows its bands.
+- **Safety prompt on isolated networks:** enabling "router reachable on all ports" for a network that's
+  walled off from your others now warns and asks to confirm first — it would otherwise expose the
+  router's admin UI / SSH to that isolated network.
+- **Clearer switched-off networks:** a down network shows its configured limit the same on both the list
+  and the detail screen, drops the confusing "Persist" line, and states plainly that it stays off across
+  reboots until you bring it up.
+- **Tailscale added to the Package & Persistence Manager** — installs the daemon plus GL's integration
+  (admin-panel toggle, kill-switch) and removes both cleanly to free the space; available across current
+  firmware (opkg and apk).
+
 ## 2026-09-01
 - **AdGuardHome Lists Manager:** after applying changes it now shows an animated **download-progress**
   spinner ("Downloading lists N of M") while AdGuardHome fetches the newly-enabled lists, instead of

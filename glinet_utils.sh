@@ -2,7 +2,7 @@
 # GL.iNet Router Toolkit
 # Author: phantasm22
 # License: GPL-3.0
-# Version: 2026-09-01
+# Version: 2026-09-06
 #
 # ── Versioning (bump the line above before every push to GitHub) ─────────────
 # The self-updater compares this value as a plain string (test's \> operator),
@@ -5130,9 +5130,34 @@ netlimit_discover() {   # emits name|iface|type|zone per shapeable network
         case "$proto" in wireguard|openvpn) type=vpn ;; esac
         case "$dev"   in wg*|tun*|ovpn*|tap*) type=vpn ;; esac
         [ -z "$type" ] && case "$name" in guest*) type=guest ;; iot*) type=iot ;; lan) type=lan ;; esac
+        # GL VLAN subnets present as a bridge device (br-vlanN) but carry a vlan_id - classify by
+        # that, else the br-* case below would mislabel them 'bridge' (so they'd not be toggleable).
+        [ -z "$type" ] && [ -n "$(uci -q get "network.$name.vlan_id" 2>/dev/null)" ] && type=vlan
         [ -z "$type" ] && case "$dev" in br-*) type=bridge ;; *.*) type=vlan ;; *) type=iface ;; esac
         zone=$(netlimit_zone_of "$name")
         [ "$zone" = "wan" ] && continue
+        printf '%s|%s|%s|%s\n' "$name" "$dev" "$type" "${zone:-}"
+    done
+}
+netlimit_discover_disabled() {   # emits name|dev|type|zone for CONFIGURED-BUT-DISABLED guest/iot/vlan
+    # netlimit_discover reads `ubus network.interface dump`, which OMITS disabled interfaces entirely,
+    # so a switched-off guest/iot network never appears there. Read those from uci instead, classify
+    # with the SAME rules, and keep ONLY the guest/iot/vlan class - that allow-list is what filters
+    # out the pile of disabled wan6/tethering6/modem_*/secondwan* noise a router accumulates.
+    local name proto dev type zone
+    uci -q show network 2>/dev/null | sed -n "s/^network\.\([A-Za-z0-9_]*\)\.disabled='1'\$/\1/p" | while read -r name; do
+        [ -z "$name" ] && continue
+        case "$name" in loopback|lo|wan|wan6|wan_*|wwan*|modem*|tethering*|secondwan*) continue ;; esac
+        proto=$(uci -q get "network.$name.proto")
+        dev=$(uci -q get "network.$name.device"); [ -z "$dev" ] && dev="br-$name"
+        type=""
+        case "$proto" in wireguard|openvpn|wgclient|wgserver|ovpnclient|ovpnserver) type=vpn ;; esac
+        case "$dev"   in wg*|tun*|ovpn*|tap*) type=vpn ;; esac
+        [ -z "$type" ] && case "$name" in guest*) type=guest ;; iot*) type=iot ;; esac
+        [ -z "$type" ] && [ -n "$(uci -q get "network.$name.vlan_id" 2>/dev/null)" ] && type=vlan
+        [ -z "$type" ] && case "$dev"  in *.*) type=vlan ;; esac
+        case "$type" in guest|iot|vlan) ;; *) continue ;; esac   # allow-list: everything else stays hidden
+        zone=$(netlimit_zone_of "$name")
         printf '%s|%s|%s|%s\n' "$name" "$dev" "$type" "${zone:-}"
     done
 }
@@ -5248,6 +5273,19 @@ netlimit_zone_input() {   # <zone-name>
     done
     return 1
 }
+netlimit_is_isolated() {   # <network-name> <zone> -> rc 0 if the network is walled off from others
+    # GL's per-network isolate flag, or a zone that rejects/drops forwarding to other networks.
+    [ "$(uci -q get "network.$1.isolate" 2>/dev/null)" = 1 ] && return 0
+    local i=0 zn fwd
+    while zn=$(uci -q get "firewall.@zone[$i].name" 2>/dev/null); do
+        if [ "$zn" = "$2" ]; then
+            fwd=$(uci -q get "firewall.@zone[$i].forward" 2>/dev/null)
+            case "$fwd" in REJECT|DROP|reject|drop) return 0 ;; *) return 1 ;; esac
+        fi
+        i=$((i+1))
+    done
+    return 1
+}
 # MEASURED router reachability from a network's zone -> open|allowed|blocked|na -------------
 # Read from the LIVE firewall, never inferred from our own config (see the "measure, don't
 # prune" rule). A zone whose input is ACCEPT (lan, and often VPN zones) reaches the router by
@@ -5309,6 +5347,81 @@ netlimit_webui() {   # iface zone 0|1  -- allow this network to reach the ROUTER
     uci commit firewall; /etc/init.d/firewall reload >/dev/null 2>&1
     # The uci firewall rule IS the persistent source of truth (survives reboot on its own) and
     # the UI reads it back live via netlimit_router_state - so nothing to record in our conf.
+}
+netlimit_ifset() {   # <network-name> <up|down> - PERSISTENT enable/disable, mirrors GL's own toggle
+    # Flip network.<name>.disabled AND the disabled flag on every wifi-iface bound to it (so the
+    # SSID follows the network up/down), commit (survives reboot), then reload network + wireless.
+    # disabled='1' = DOWN. Wireless reload briefly re-applies all radios - unavoidable when a
+    # guest/iot SSID is attached/detached; GL's toggle does the same.
+    local net="$1" want="$2" dis w dev dl ul j=0
+    [ "$want" = up ] && dis=0 || dis=1
+    dev=$(uci -q get "network.$net.device" 2>/dev/null); [ -z "$dev" ] && dev="br-$net"
+    uci -q set "network.$net.disabled=$dis"
+    for w in $(uci -q show wireless 2>/dev/null | sed -n "s/^wireless\.\(.*\)\.network='$net'\$/\1/p"); do
+        uci -q set "wireless.$w.disabled=$dis"
+    done
+    uci commit network; uci commit wireless
+    /etc/init.d/network reload >/dev/null 2>&1
+    command -v wifi >/dev/null 2>&1 && wifi reload >/dev/null 2>&1
+    netlimit_reshape "$dev" "$want"
+    return 0
+}
+netlimit_reshape() {   # <dev> <up|down> - re-apply this interface's configured limit on up, clear on down
+    # Bringing an interface up does NOT restore its shaping, so re-apply THIS interface's configured
+    # limit directly. (A full netlimit_reload would stall ~30s on any OTHER limited-but-down network,
+    # since the service waits for each iface to appear.) Applying regardless of offload keeps the qdisc
+    # present, so the row reads BYPASSED (offload on) / ACTIVE (offload off) like the others. On down,
+    # tear the shaping down so no orphan ifb device lingers.
+    local dev="$1" want="$2" dl ul j=0
+    dl=$(netlimit_conf_field "$dev" 2); ul=$(netlimit_conf_field "$dev" 3)
+    case "$dl" in ''|*[!0-9]*) dl=0 ;; esac; case "$ul" in ''|*[!0-9]*) ul=0 ;; esac
+    if [ "$want" = up ]; then
+        if [ "$dl" -gt 0 ] || [ "$ul" -gt 0 ]; then
+            while [ ! -d "/sys/class/net/$dev" ] && [ "$j" -lt 10 ]; do sleep 1; j=$((j+1)); done
+            netlimit_tc_clear_cmds "$dev" | sh 2>/dev/null
+            netlimit_tc_apply_cmds "$dev" "$dl" "$ul" | sh 2>/dev/null
+        fi
+    else
+        netlimit_tc_clear_cmds "$dev" | sh 2>/dev/null
+    fi
+}
+netlimit_net_wifi() {   # <net> -> "iface|band|ssid|disabled" per wifi-iface; 2.4/5/6 GHz first, Other last
+    # Band comes from the iface's radio (wireless.<radio>.band = 2g/5g/6g). MLO member links (wlanmld*)
+    # and any iface without a 2/5/6 band are "Other": iface shown, band+ssid blanked (forward-compat if
+    # MLO is ever surfaced for guest/iot). Annotate-sort-strip (busybox `sort -t -k` is a no-op).
+    local net="$1" sec dev band ssid dis blabel k
+    for sec in $(uci -q show wireless 2>/dev/null | sed -n "s/^wireless\.\(.*\)\.network='$net'\$/\1/p"); do
+        dev=$(uci -q get "wireless.$sec.device" 2>/dev/null)
+        band=$(uci -q get "wireless.$dev.band" 2>/dev/null)
+        ssid=$(uci -q get "wireless.$sec.ssid" 2>/dev/null)
+        dis=$(uci -q get "wireless.$sec.disabled" 2>/dev/null); [ "$dis" = 1 ] || dis=0
+        case "$sec" in *mld*|*mlo*) band="" ;; esac
+        case "$band" in 2g) blabel="2.4 GHz"; k=1 ;; 5g) blabel="5 GHz"; k=2 ;; 6g) blabel="6 GHz"; k=3 ;; *) blabel=""; ssid=""; k=9 ;; esac
+        printf '%s %s|%s|%s|%s\n' "$k" "$sec" "$blabel" "$ssid" "$dis"
+    done | sort -n | sed 's/^[0-9]* //'
+}
+netlimit_net_ifstate() {   # <net> -> up|down (band-aware: a wifi network is UP iff any of its SSIDs is up)
+    [ "$(uci -q get "network.$1.disabled" 2>/dev/null)" = 1 ] && { echo down; return; }
+    local sec any_wifi=0 any_up=0
+    for sec in $(uci -q show wireless 2>/dev/null | sed -n "s/^wireless\.\(.*\)\.network='$1'\$/\1/p"); do
+        any_wifi=1; [ "$(uci -q get "wireless.$sec.disabled" 2>/dev/null)" = 1 ] || any_up=1
+    done
+    if [ "$any_wifi" = 1 ]; then [ "$any_up" = 1 ] && echo up || echo down; else echo up; fi
+}
+netlimit_bands_apply() {   # <net> <dev> <mapfile: idx|iface|band|ssid|sel(=up)> - apply band selection
+    local net="$1" dev="$2" mf="$3" idx sec band ssid sel any_up=0
+    while IFS='|' read -r idx sec band ssid sel; do
+        [ -z "$sec" ] && continue
+        if [ "$sel" = 1 ]; then uci -q set "wireless.$sec.disabled=0"; any_up=1
+        else uci -q set "wireless.$sec.disabled=1"; fi
+    done < "$mf"
+    # The network master follows the bands: enabled iff at least one band is up.
+    [ "$any_up" = 1 ] && uci -q set "network.$net.disabled=0" || uci -q set "network.$net.disabled=1"
+    uci commit wireless; uci commit network
+    /etc/init.d/network reload >/dev/null 2>&1
+    command -v wifi >/dev/null 2>&1 && wifi reload >/dev/null 2>&1
+    [ "$any_up" = 1 ] && netlimit_reshape "$dev" up || netlimit_reshape "$dev" down
+    return 0
 }
 netlimit_guest_parse() {   # <initscript> -> "dl ul"
     local f="$1" dl ul
@@ -5436,15 +5549,16 @@ Network Bandwidth Limiter - Quick Help
 
 Sets a download/upload speed ceiling on any of the router's networks - guest, IoT,
 a LAN, a VLAN, or a VPN tunnel - discovered automatically (a network only appears if
-it exists on this device).
+it exists on this device). Switched-off guest / IoT / VLAN networks are shown too,
+marked DOWN, so you can bring them back up from here.
 
 The grid
 --------
-  * Each row is a shapeable network: its Download / Upload limits, whether it can reach
-    the router itself (Router), whether the limit persists across firmware upgrades, and
-    whether a limit is ACTIVE right now (a limit shows BYPASSED if HW acceleration is on,
-    since offload skips the shaper). Router and Status are MEASURED from the live firewall
-    and tc state, not from stored settings.
+  * Each row is a network: its If-State (UP, or DOWN if it's switched off), its Download /
+    Upload limits, whether it can reach the router itself (Router), whether the limit persists
+    across firmware upgrades, and whether a limit is ACTIVE right now (a limit shows BYPASSED
+    if HW acceleration is on, since offload skips the shaper). Router and Status are MEASURED
+    from the live firewall and tc state, not from stored settings.
   * Pick a number to open that network and set its limits.
   * [R] Reset reverts everything to defaults: removes every limit and router rule,
     re-enables HW acceleration, and stops the background service (asks first).
@@ -5480,6 +5594,8 @@ Per-network options
       - blocked   (red)    no router services reachable at all (rare)
     "Enable router to be reachable on all ports" opens every port; the matching "Disable ..."
     removes only that and falls back to partial (it does NOT block - DNS/DHCP keep working).
+    On an ISOLATED network (walled off from your other networks) it warns and confirms first,
+    since opening all ports also exposes the router's admin UI / SSH to that network.
     Networks whose zone already accepts input (the LAN,
     and typically VPN zones) are "managed by zone" and not toggled here - that would risk
     locking you out. (Only ACCEPT rules are counted; hand-written nft rules outside uci are
@@ -5488,14 +5604,64 @@ Per-network options
     lives on the overlay). This keeps it across a firmware UPGRADE too, by adding it to the
     sysupgrade backup - so "NO" means reboot-safe but lost on a firmware upgrade.
   * Disable: remove the limit entirely.
+  * Bring interface(s) UP / DOWN: switch a guest / IoT / VLAN network on or off - a persistent
+    change, like the GL admin toggle, so it survives a reboot. A network with multiple Wi-Fi
+    bands (2.4 / 5 / 6 GHz) opens a grid where you pick which bands to bring up or down - the
+    network reads UP while any band is up, DOWN once all are off; single-interface networks (a
+    wired VLAN) toggle as a whole. A switched-off network offers only "Bring interface(s) UP",
+    since limits and router access don't apply until it's up. The LAN and VPN tunnels are never
+    toggled here. Turning bands on/off briefly re-applies Wi-Fi, so other wireless may drop for
+    a moment.
 HELPEOF
 }
 
+_netlimit_bands_edit() {   # <net> <dev> - multi-select which sub-interfaces (bands) are UP; apply on [C]
+    # Mirrors the AdGuardHome Backup Cleanup selector: a persistent selection map, checkmark = "this
+    # band should be UP". Confirm applies every band's wireless.disabled and syncs network.disabled.
+    local net="$1" dev="$2" mf="/tmp/nl_bands_map" input cmd idx sec band ssid sel box _bdiv i
+    rm -f "$mf"; i=1
+    netlimit_net_wifi "$net" | while IFS='|' read -r sec band ssid dis; do
+        [ -z "$sec" ] && continue
+        [ "$dis" = 1 ] && echo "$i|$sec|$band|$ssid|0" >> "$mf" || echo "$i|$sec|$band|$ssid|1" >> "$mf"
+        i=$((i+1))
+    done
+    [ -s "$mf" ] || { rm -f "$mf"; return; }
+    _bdiv=$(awk -F'|' 'function m(a,b){return a>b?a:b} {w=25+m(16,length($2))+length($4); if(w>x)x=w} END{s="";for(i=0;i<x;i++)s=s"─";print s}' "$mf")
+    while true; do
+        clear
+        print_centered_header "$net - Wi-Fi Bands"
+        printf " %-3s  %-4s  %-16s  %-9s  %s\n" "Sel" "Idx" "Iface" "Band" "SSID"
+        printf " %s\n" "$_bdiv"
+        while IFS='|' read -r idx sec band ssid sel; do
+            box="[ ]"; [ "$sel" = 1 ] && box="[✓]"
+            printf " %s  %-4s  %-16s  %-9s  %s\n" "$box" "$idx." "$sec" "${band:--}" "${ssid:--}"
+        done < "$mf"
+        printf " %s\n" "$_bdiv"
+        printf " [A] All   [N] None   [#] Toggle   [C] Confirm   [0] Cancel\n"
+        i=$(wc -l < "$mf" | tr -dc '0-9')
+        printf "\n Choose [%s/A/N/C/0]: " "$(picker_range "$i")"
+        read -r input; cmd=$(echo "$input" | tr 'A-Z' 'a-z'); printf '\n'
+        case "$cmd" in
+            a) sed -i 's/|0$/|1/' "$mf" ;;
+            n) sed -i 's/|1$/|0/' "$mf" ;;
+            [1-9]*)
+                if grep -q "^$cmd|" "$mf"; then
+                    sel=$(grep "^$cmd|" "$mf" | cut -d'|' -f5)
+                    sed -i "s/^\($cmd|[^|]*|[^|]*|[^|]*|\).*/\1$((1-sel))/" "$mf"
+                else print_error "Index $cmd not found"; sleep 1; fi ;;
+            c) spin_run "Applying Wi-Fi bands" netlimit_bands_apply "$net" "$dev" "$mf"; rm -f "$mf"; return ;;
+            0) rm -f "$mf"; return ;;
+            *) print_error "Invalid option"; sleep 1 ;;
+        esac
+    done
+}
 _netlimit_edit() {   # <map-line>
-    local idx name iface type zone dl ul wb ps st ans rl
-    IFS='|' read -r idx name iface type zone dl ul wb ps st <<EOF
+    local idx name iface type zone dl ul wb ps st ans rl ifstate _dis _togglable _iso dev _wcount _bup _banded _blabel
+    IFS='|' read -r idx name iface type zone dl ul wb ps st ifstate <<EOF
 $1
 EOF
+    case "$type" in guest|iot|vlan) _togglable=1 ;; *) _togglable=0 ;; esac
+    dev=$(uci -q get "network.$name.device" 2>/dev/null); [ -z "$dev" ] && dev="$iface"
     while true; do
         clear
         print_centered_header "$name - Bandwidth Limit"
@@ -5506,6 +5672,21 @@ EOF
         if tc qdisc show dev "$iface" 2>/dev/null | grep -q htb; then
             [ "$(offload_state)" = off ] && st="ACTIVE" || st="BYPASSED (HW accel on)"
         fi
+        # Sub-interfaces (Wi-Fi bands) on this network's bridge, and how many are up. A network with
+        # 2+ bands gets per-band control (a grid); 0-1 stays the simple whole-interface toggle.
+        _wcount=0; _bup=0; _banded=0
+        if [ "$_togglable" = 1 ]; then
+            _wcount=$(netlimit_net_wifi "$name" | grep -c .)
+            _bup=$(netlimit_net_wifi "$name" | awk -F'|' '$4!=1{c++} END{print c+0}')
+            [ "$_wcount" -ge 2 ] && _banded=1
+        fi
+        # Recompute If-State live - band-aware for wifi networks (UP iff any band up), else the
+        # network.disabled flag. It flips when the user brings the interface(s) up/down below.
+        case "$type" in
+            guest|iot) ifstate=$(netlimit_net_ifstate "$name") ;;
+            *) _dis=$(uci -q get "network.$name.disabled" 2>/dev/null); [ "$_dis" = 1 ] && ifstate=down || ifstate=up ;;
+        esac
+        [ "$ifstate" = down ] && wb=na   # a down network is unreachable - don't imply a router state
         # Standard vertical-menu layout (see [[ui-vertical-menu-structure]]): the Status summary
         # leads, then a blank line, then the detail fields (grid-column order: Network, Interface,
         # Download, Upload, Router, Persist), then a blank line, then the numbered options. Status
@@ -5513,15 +5694,29 @@ EOF
         printf " %bStatus:%b      %s\n\n" "$CYAN" "$RESET" "$st"
         printf " %bNetwork:%b     %s\n" "$CYAN" "$RESET" "$name"
         printf " %bInterface:%b   %s\n" "$CYAN" "$RESET" "$iface"
+        if [ "$ifstate" = down ]; then printf " %bIf-State:%b    %bDOWN%b\n" "$CYAN" "$RESET" "$GREY" "$RESET"
+        else printf " %bIf-State:%b    UP\n" "$CYAN" "$RESET"; fi
+        # For multi-band wifi networks, break the If-State down per band (2.4/5/6 GHz, then Other).
+        if [ "$_banded" = 1 ]; then
+            netlimit_net_wifi "$name" | while IFS='|' read -r _bi _bb _bs _bd; do
+                [ -z "$_bi" ] && continue
+                if [ "$_bd" = 1 ]; then printf "   %-10s %bDOWN%b\n" "${_bb:-$_bi}" "$GREY" "$RESET"
+                else printf "   %-10s UP\n" "${_bb:-$_bi}"; fi
+            done
+        fi
         printf " %bDownload:%b    %s\n" "$CYAN" "$RESET" "$(_nl_rate "$dl")"
         printf " %bUpload:%b      %s\n" "$CYAN" "$RESET" "$(_nl_rate "$ul")"
-        case "$wb" in
-            open)    rl="$(_nl_dot reachable) REACHABLE (managed by zone)" ;;
-            full)    rl="$(_nl_dot reachable) REACHABLE (all ports)" ;;
-            partial) rl="$(_nl_dot partial) PARTIAL (some ports)" ;;
-            blocked) rl="$(_nl_dot blocked) BLOCKED (no access)" ;;
-            *)       rl="$(_nl_dot unknown) N/A" ;;
-        esac
+        if [ "$ifstate" = down ]; then
+            rl="$(printf '%b—%b' "$GREY" "$RESET") N/A"   # down: no router relationship (grey, not a RAG dot)
+        else
+            case "$wb" in
+                open)    rl="$(_nl_dot reachable) REACHABLE (managed by zone)" ;;
+                full)    rl="$(_nl_dot reachable) REACHABLE (all ports)" ;;
+                partial) rl="$(_nl_dot partial) PARTIAL (some ports)" ;;
+                blocked) rl="$(_nl_dot blocked) BLOCKED (no access)" ;;
+                *)       rl="$(_nl_dot unknown) N/A" ;;
+            esac
+        fi
         printf " %bRouter:%b      %s\n" "$CYAN" "$RESET" "$rl"
         # Only partial needs a breakdown (which services) - the parenthetical already says
         # "all ports" / "no access" for the other states.
@@ -5535,54 +5730,102 @@ EOF
         # A limit ALWAYS survives reboot (service enabled, config on overlay); "Persist" is
         # specifically about a firmware UPGRADE (sysupgrade backup) - spell that out so "NO"
         # is never read as "lost on reboot".
-        if [ "$ps" = 1 ]; then printf " %bPersist:%b     YES  %b(survives firmware upgrades)%b\n" "$CYAN" "$RESET" "$GREY" "$RESET"
-        else printf " %bPersist:%b     NO   %b(reboot-safe; lost on firmware upgrade)%b\n" "$CYAN" "$RESET" "$GREY" "$RESET"; fi
+        # Persist is a LIMIT attribute (does the limit survive a firmware upgrade) - meaningless and
+        # confusing on a switched-off network, so suppress it there; the OFF note covers reboot state.
+        if [ "$ifstate" != down ]; then
+            if [ "$ps" = 1 ]; then printf " %bPersist:%b     YES  %b(survives firmware upgrades)%b\n" "$CYAN" "$RESET" "$GREY" "$RESET"
+            else printf " %bPersist:%b     NO   %b(reboot-safe; lost on firmware upgrade)%b\n" "$CYAN" "$RESET" "$GREY" "$RESET"; fi
+        fi
         printf "\n"
-        printf " %s%sSet download limit\n" "$N1" "$NSEP"
-        printf " %s%sSet upload limit\n"   "$N2" "$NSEP"
-        case "$wb" in
-            blocked|partial) printf " %s%sEnable router to be reachable on all ports\n" "$N3" "$NSEP" ;;
-            full)            printf " %s%sDisable router to be reachable on all ports\n" "$N3" "$NSEP" ;;
-            *)               printf " %s%sRouter access (managed by zone)\n" "$N3" "$NSEP" ;;
-        esac
-        [ "$ps" = 1 ] && printf " %s%sDisable persistence\n" "$N4" "$NSEP" || printf " %s%sEnable persistence\n" "$N4" "$NSEP"
-        printf " %s%sDisable limit\n" "$N5" "$NSEP"
-        printf " %s%sBack\n" "$N0" "$NSEP"
-        printf "\nChoose [1-5/0]: "
-        read -r ans; printf "\n"
-        case "$ans" in
-            1) printf "Download limit in Mbps (0 = none): "; read -r v; case "$v" in
-                 ''|*[!0-9]*) print_error "Numbers only"; sleep 1 ;;
-                 *) if [ "$v" -gt 0 ] || [ "$ul" -gt 0 ]; then _netlimit_offload_ok || continue; fi
-                    printf '\n'
-                    spin_run "Applying limit" netlimit_set "$iface" "$v" "$ul" ;; esac ;;
-            2) printf "Upload limit in Mbps (0 = none): "; read -r v; case "$v" in
-                 ''|*[!0-9]*) print_error "Numbers only"; sleep 1 ;;
-                 *) if [ "$v" -gt 0 ] || [ "$dl" -gt 0 ]; then _netlimit_offload_ok || continue; fi
-                    printf '\n'
-                    spin_run "Applying limit" netlimit_set "$iface" "$dl" "$v" ;; esac ;;
-            3) case "$wb" in
-                 blocked|partial) spin_run "Updating firewall" netlimit_webui "$iface" "$zone" 1 ;;
-                 full)            spin_run "Updating firewall" netlimit_webui "$iface" "$zone" 0 ;;
-                 open)            print_info "Router access for '$name' is governed by its firewall zone (input policy =\nACCEPT), not by this limiter. To change it, edit the '$zone' zone in the firewall."
-                                  press_any_key ;;
-                 *)               print_info "This network has no firewall zone, so router access can't be toggled here."
-                                  press_any_key ;;
-               esac ;;
-            4) netlimit_conf_put "$iface" "$dl" "$ul" "$(netlimit_conf_field "$iface" 4)" "$([ "$ps" = 1 ] && echo 0 || echo 1)"; netlimit_persist_sync ;;
-            5) spin_run "Removing limit" netlimit_set "$iface" 0 0 ;;
-            0) return ;;
-            *) print_error "Invalid option"; sleep 1 ;;
-        esac
+        if [ "$ifstate" = down ]; then
+            # A switched-off network can't be shaped or reached, so the only action is to bring it
+            # up. NOTE: "Bring interface UP/DOWN" (not the standard Enable/Disable) is a DELIBERATE
+            # exception to the toggle-label standard, chosen so the verb matches the If-State value.
+            printf " %bThis network is OFF and stays off across reboots until you bring it up.%b\n" "$GREY" "$RESET"
+            printf " %bBring it up to set limits or router access.%b\n\n" "$GREY" "$RESET"
+            if [ "$_banded" = 1 ]; then printf " %s%sBring interfaces UP\n" "$N1" "$NSEP"
+            else printf " %s%sBring interface UP\n" "$N1" "$NSEP"; fi
+            printf " %s%sBack\n" "$N0" "$NSEP"
+            printf "\nChoose [1/0]: "
+            read -r ans; printf "\n"
+            case "$ans" in
+                1) if [ "$_banded" = 1 ]; then _netlimit_bands_edit "$name" "$dev"
+                   else spin_run "Bringing $name up" netlimit_ifset "$name" up; fi ;;
+                0) return ;;
+                *) print_error "Invalid option"; sleep 1 ;;
+            esac
+        else
+            printf " %s%sSet download limit\n" "$N1" "$NSEP"
+            printf " %s%sSet upload limit\n"   "$N2" "$NSEP"
+            case "$wb" in
+                blocked|partial) printf " %s%sEnable router to be reachable on all ports\n" "$N3" "$NSEP" ;;
+                full)            printf " %s%sDisable router to be reachable on all ports\n" "$N3" "$NSEP" ;;
+                *)               printf " %s%sRouter access (managed by zone)\n" "$N3" "$NSEP" ;;
+            esac
+            [ "$ps" = 1 ] && printf " %s%sDisable persistence\n" "$N4" "$NSEP" || printf " %s%sEnable persistence\n" "$N4" "$NSEP"
+            printf " %s%sDisable limit\n" "$N5" "$NSEP"
+            # guest/iot/vlan can be switched off from here (never lan/vpn); verb matches If-State.
+            # Multi-band networks get a per-band grid with a state-dependent label (all up -> DOWN;
+            # a mix -> UP or DOWN); single-interface ones keep the simple whole-interface toggle.
+            if [ "$_banded" = 1 ]; then
+                [ "$_bup" -eq "$_wcount" ] && _blabel="Bring interfaces DOWN" || _blabel="Bring interfaces UP or DOWN"
+                printf " %s%s%s\n" "$N6" "$NSEP" "$_blabel"
+            elif [ "$_togglable" = 1 ]; then
+                printf " %s%sBring interface DOWN\n" "$N6" "$NSEP"
+            fi
+            printf " %s%sBack\n" "$N0" "$NSEP"
+            { [ "$_banded" = 1 ] || [ "$_togglable" = 1 ]; } && printf "\nChoose [1-6/0]: " || printf "\nChoose [1-5/0]: "
+            read -r ans; printf "\n"
+            case "$ans" in
+                1) printf "Download limit in Mbps (0 = none): "; read -r v; case "$v" in
+                     ''|*[!0-9]*) print_error "Numbers only"; sleep 1 ;;
+                     *) if [ "$v" -gt 0 ] || [ "$ul" -gt 0 ]; then _netlimit_offload_ok || continue; fi
+                        printf '\n'
+                        spin_run "Applying limit" netlimit_set "$iface" "$v" "$ul" ;; esac ;;
+                2) printf "Upload limit in Mbps (0 = none): "; read -r v; case "$v" in
+                     ''|*[!0-9]*) print_error "Numbers only"; sleep 1 ;;
+                     *) if [ "$v" -gt 0 ] || [ "$dl" -gt 0 ]; then _netlimit_offload_ok || continue; fi
+                        printf '\n'
+                        spin_run "Applying limit" netlimit_set "$iface" "$dl" "$v" ;; esac ;;
+                3) case "$wb" in
+                     blocked|partial)
+                        # Opening ALL router ports to an ISOLATED network exposes admin UI/SSH to a
+                        # network deliberately walled off from everything else - warn and confirm.
+                        if netlimit_is_isolated "$name" "$zone"; then
+                            print_warning "'$name' is an ISOLATED network - walled off from your other networks.\nOpening all router ports also exposes the router's admin UI, SSH and other\nservices to any device on it."
+                            printf "Open all router ports to '$name' anyway? [y/N]: "; read -r _iso; printf '\n'
+                            case "$_iso" in y|Y) ;; *) continue ;; esac
+                        fi
+                        spin_run "Updating firewall" netlimit_webui "$iface" "$zone" 1 ;;
+                     full)            spin_run "Updating firewall" netlimit_webui "$iface" "$zone" 0 ;;
+                     open)            print_info "Router access for '$name' is governed by its firewall zone (input policy =\nACCEPT), not by this limiter. To change it, edit the '$zone' zone in the firewall."
+                                      press_any_key ;;
+                     *)               print_info "This network has no firewall zone, so router access can't be toggled here."
+                                      press_any_key ;;
+                   esac ;;
+                4) netlimit_conf_put "$iface" "$dl" "$ul" "$(netlimit_conf_field "$iface" 4)" "$([ "$ps" = 1 ] && echo 0 || echo 1)"; netlimit_persist_sync ;;
+                5) spin_run "Removing limit" netlimit_set "$iface" 0 0 ;;
+                6) if [ "$_banded" = 1 ]; then _netlimit_bands_edit "$name" "$dev"
+                   elif [ "$_togglable" = 1 ]; then spin_run "Bringing $name down" netlimit_ifset "$name" down
+                   else print_error "Invalid option"; sleep 1; fi ;;
+                0) return ;;
+                *) print_error "Invalid option"; sleep 1 ;;
+            esac
+        fi
     done
 }
 
-_netlimit_build_map() {
-    netlimit_migrate_guest 2>/dev/null
-    : > "$NL_MAP"
-    local i=1 name iface type zone dl ul wb ps st
-    netlimit_discover | while IFS='|' read -r name iface type zone; do
-        [ -z "$iface" ] && continue
+_nl_map_row() {   # name iface type zone ifstate -> name|iface|type|zone|dl|ul|wb|ps|st|ifstate
+    local name="$1" iface="$2" type="$3" zone="$4" ifstate="$5" dl ul ps wb st
+    if [ "$ifstate" = down ]; then
+        # A down network can't be reached or actively shaped, but its configured limit PERSISTS
+        # (re-applies when brought up), so show the REAL limit - matching the edit screen - rather
+        # than blanking it. Only Router (unreachable) and Status (not shaping) are N/A here.
+        dl=$(netlimit_conf_field "$iface" 2); ul=$(netlimit_conf_field "$iface" 3)
+        ps=$(netlimit_conf_field "$iface" 5)
+        : "${dl:=0}"; : "${ul:=0}"; : "${ps:=0}"
+        wb=na; st=inactive
+    else
         dl=$(netlimit_conf_field "$iface" 2); ul=$(netlimit_conf_field "$iface" 3)
         ps=$(netlimit_conf_field "$iface" 5); wb=$(netlimit_router_state "$zone")   # wb = MEASURED router-state token
         : "${dl:=0}"; : "${ul:=0}"; : "${ps:=0}"
@@ -5592,13 +5835,32 @@ _netlimit_build_map() {
         if tc qdisc show dev "$iface" 2>/dev/null | grep -q htb; then
             [ "$(offload_state)" = off ] && st=active || st=bypassed
         fi
-        echo "$i|$name|$iface|$type|$zone|$dl|$ul|$wb|$ps|$st" >> "$NL_MAP"
-        i=$((i+1))
+    fi
+    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' "$name" "$iface" "$type" "$zone" "$dl" "$ul" "$wb" "$ps" "$st" "$ifstate"
+}
+_netlimit_build_map() {
+    netlimit_migrate_guest 2>/dev/null
+    local tmp="${NL_MAP}.tmp"; : > "$tmp"
+    # Pass 1: live, shapeable networks (ubus) -> If-State UP. For wifi networks (guest/iot) the state
+    # is band-aware: a network whose SSIDs are all switched off reads DOWN even if its bridge is up.
+    netlimit_discover | while IFS='|' read -r name iface type zone; do
+        [ -z "$iface" ] && continue
+        case "$type" in
+            guest|iot) _nl_map_row "$name" "$iface" "$type" "$zone" "$(netlimit_net_ifstate "$name")" >> "$tmp" ;;
+            *)         _nl_map_row "$name" "$iface" "$type" "$zone" up >> "$tmp" ;;
+        esac
     done
+    # Pass 2: configured-but-DISABLED guest/iot/vlan (uci) -> If-State DOWN (shown + toggleable).
+    netlimit_discover_disabled | while IFS='|' read -r name iface type zone; do
+        [ -z "$name" ] && continue
+        _nl_map_row "$name" "$iface" "$type" "$zone" down >> "$tmp"
+    done
+    # Number the whole set at the end (down rows fall after the live ones, so they sort last).
+    awk '{print NR"|"$0}' "$tmp" > "$NL_MAP"; rm -f "$tmp"
 }
 
 manage_netlimit() {
-    local _div; _div=$(awk 'BEGIN{s="";for(i=0;i<82;i++)s=s"─";print s}')
+    local _div; _div=$(awk 'BEGIN{s="";for(i=0;i<89;i++)s=s"─";print s}')
     clear; print_centered_header "Network Bandwidth Limiter"
     spin_run "Discovering networks" _netlimit_build_map
     # Preflight: shaping needs tc (tc-tiny). Present on GL firmware; require_cmd reinstalls it if a
@@ -5624,19 +5886,23 @@ manage_netlimit() {
             printf " %bHW Acceleration:%b %bENABLED%b\n" "$CYAN" "$RESET" "$GREEN" "$RESET"
         fi
         printf "\n"
-        printf "       %-14s %-13s %-9s %-9s %-8s %-8s %s\n" "Network" "Interface" "Download" "Upload" "Router" "Persist" "Status"
+        printf "       %-14s %-13s %-8s %-9s %-9s %-8s %-8s %s\n" "Network" "Interface" "If-State" "Download" "Upload" "Router" "Persist" "Status"
         printf " %s\n" "$_div"
-        while IFS='|' read -r idx name iface type zone dl ul wb ps st; do
-            local rdot pbl stc stu
+        while IFS='|' read -r idx name iface type zone dl ul wb ps st ifstate; do
+            local rdot pbl stc stu ifc ifv nmc
             case "$wb" in
                 open|full) rdot="$_S_RLA_AC" ;;
                 partial)   rdot="$_S_RLA_RO" ;;
                 blocked)   rdot="$_S_RLA_IA" ;;
                 *)         rdot=$(printf '   %b—%b    ' "$GREY" "$RESET") ;;
             esac
-            [ "$ps" = 1 ] && pbl="YES" || pbl="NO"
+            # Persist is a LIMIT attribute (firmware-upgrade survival); it's meaningless/confusing on
+            # a down network, so show "-" there - matching the edit screen, which hides it entirely.
+            if [ "$ifstate" = down ]; then pbl="-"; elif [ "$ps" = 1 ]; then pbl="YES"; else pbl="NO"; fi
             case "$st" in active) stc="$GREEN"; stu="ACTIVE" ;; bypassed) stc="$YELLOW"; stu="BYPASSED" ;; *) stc="$GREY"; stu="INACTIVE" ;; esac
-            printf " %-5s %-14s %-13s %-9s %-9s %s %-8s %b%s%b\n" "$idx." "$name" "$iface" "$(_nl_rate "$dl")" "$(_nl_rate "$ul")" "$rdot" "$pbl" "$stc" "$stu" "$RESET"
+            # If-State: UP for live networks, DOWN (dimmed row) for configured-but-disabled ones.
+            if [ "$ifstate" = down ]; then ifc="$GREY"; ifv="DOWN"; nmc="$GREY"; else ifc="$GREEN"; ifv="UP"; nmc="$RESET"; fi
+            printf " %-5s %b%-14s %-13s%b %b%-8s%b %-9s %-9s %s %-8s %b%s%b\n" "$idx." "$nmc" "$name" "$iface" "$RESET" "$ifc" "$ifv" "$RESET" "$(_nl_rate "$dl")" "$(_nl_rate "$ul")" "$rdot" "$pbl" "$stc" "$stu" "$RESET"
         done < "$NL_MAP"
         printf "\n"
         printf " Legend: %s reachable (all ports)  %s partial (some ports)  %s blocked (no access)\n" "$(_nl_dot reachable)" "$(_nl_dot partial)" "$(_nl_dot blocked)"
@@ -6283,6 +6549,7 @@ diffutils|/usr/bin/diff|B|/usr/bin/diff
 vim-fuller|/usr/bin/vim|R|/usr/bin/vim
 $_st_line
 iperf3|/usr/bin/iperf3|B|/usr/bin/iperf3
+tailscale|/usr/sbin/tailscale|R|/etc/config/tailscale /etc/tailscale
 iputils-ping|/usr/bin/ping|B|/usr/bin/ping"
 
     local map_file="/tmp/pkg_manage_map"
@@ -6623,6 +6890,10 @@ EOF
                         if [[ "$action" == *"> Remove"* ]] || [[ "$action" == *"> Unpersist"* ]]; then
                             if [ "$i_t" -eq 0 ]; then
                                 if pkg_is_installed "$name"; then
+                                    # Tailscale: remove the GL wrapper (the dependent) FIRST so the base
+                                    # package then removes cleanly and frees its ~6.4M, instead of hitting
+                                    # a 'depended upon' wall and force-breaking gl-sdk4-tailscale.
+                                    [ "$name" = tailscale ] && pkg_is_installed gl-sdk4-tailscale && pkg_remove gl-sdk4-tailscale >/dev/null 2>&1
                                     # opkg-managed: let opkg remove the package (and all its files).
                                     _rout=$(pkg_remove "$name" 2>&1)
                                     if pkg_is_installed "$name"; then
@@ -6681,6 +6952,14 @@ EOF
                                     install_ookla_speedtest
                                 elif [ "$name" == "speedtest-go" ]; then
                                     install_speedtest_go /usr/bin || install_fail=$((install_fail + 1))
+                                elif [ "$name" == "tailscale" ]; then
+                                    # Tailscale = base binaries (tailscale, ~6.4M) + GL integration
+                                    # (gl-sdk4-tailscale: service, /etc/config, admin-panel UI, firewall
+                                    # killswitch). Install both so the feature actually works; the wrapper
+                                    # is best-effort (absent on the oldest firmware) and only the base
+                                    # counts toward install_fail.
+                                    install_package tailscale || install_fail=$((install_fail + 1))
+                                    pkg_is_installed tailscale && install_package gl-sdk4-tailscale >/dev/null 2>&1
                                 else
                                     install_package "$name" || install_fail=$((install_fail + 1))
                                 fi
@@ -9966,6 +10245,9 @@ Notes
 ─────
   • A package with no build for your CPU (e.g. the Ookla speed test on MIPS) is
     called out up front, with an alternative suggested.
+  • Tailscale installs both the daemon and GL's integration (admin-panel toggle,
+    kill-switch), and removing it takes both so the full space is freed. It's on
+    current firmware; the oldest builds may not offer it.
 
 HELPEOF
 }

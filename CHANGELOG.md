@@ -4,6 +4,19 @@ All notable changes to the GL.iNet Utilities toolkit. Newest first. Versions
 match the `# Version:` line in the script — `YYYY-MM-DD`, or `YYYY-MM-DD_HH:MM`
 for multiple releases on the same day.
 
+## 2026-09-06_20:06
+- **OpenSpeedTest Server is now a native, fully integrated tool.** Host the OpenSpeedTest web app on
+  the router (its own nginx on port 8888) to measure LAN / Wi-Fi speed between a device and the router
+  — no internet, no app. Replaces the external installer wrapper, conforming to the toolkit's UI: a
+  STATUS block, keycap menu, `[?]` Quick Help, spinner, and `[0] Back`.
+- **Two download sources, honest space check.** Choose the official GitHub repository (a tarball
+  *streamed* straight to flash — lightest footprint) or the GL.iNet mirror (a zip that stages ~32 MB in
+  /tmp). The source screen shows live free space vs. what's required, and a **reinstall credits the
+  space the current copy will free** so it no longer falsely fails on a space-tight box already hosting
+  it. If flash is short it offers to relocate onto a mounted drive.
+- **Install / Diagnostics / Uninstall / Persistence** from one screen; persistence keeps it across a
+  firmware upgrade. Menu **exit is now `[0]`** (was `[5]`).
+
 ## 2026-09-06
 - **Network Bandwidth Limiter — see and switch each network's interface.** A new **If-State** column
   shows whether each network is UP or DOWN, and switched-off guest / IoT / VLAN networks now appear in

@@ -2,7 +2,7 @@
 # GL.iNet Router Toolkit
 # Author: phantasm22
 # License: GPL-3.0
-# Version: 2026-09-06
+# Version: 2026-09-06_20:06
 #
 # ── Versioning (bump the line above before every push to GitHub) ─────────────
 # The self-updater compares this value as a plain string (test's \> operator),
@@ -11647,7 +11647,7 @@ mt1300|Beryl|MT7621|179.39'
                 print_success "iperf3 Server stopped"
                 press_any_key
                 ;;
-            9)  install_openspeedtest ;;
+            9)  manage_openspeedtest ;;
             0)
                 return
                 ;;
@@ -11989,49 +11989,361 @@ view_uci_config() {
     done
 }
 
-install_openspeedtest() {
-    local script_url="https://raw.githubusercontent.com/phantasm22/OpenSpeedTestServer/main/install_openspeedtest.sh"
-    local script_name="install_openspeedtest.sh"
-    local expected_header="Author: phantasm22"
+# ============================ OpenSpeedTest Server ============================
+# Native integration (forked from phantasm22/OpenSpeedTestServer, nginx-based). Serves the
+# OpenSpeedTest web app via its own nginx instance on OST_PORT. nginx is kept because its config is
+# tuned for the speed test (the 405->200 upload trick, 10000M body, sendfile); dependencies install
+# only if missing (via require_cmd -> the apk/opkg-aware installer) so it still works on firmware we
+# can't test (e.g. OP24) where they may not be preinstalled.
+OST_INSTALL_DIR="/www2"
+OST_CONFIG_PATH="/etc/nginx/nginx_openspeedtest.conf"
+OST_STARTUP_SCRIPT="/etc/init.d/nginx_speedtest"
+OST_PID_FILE="/var/run/nginx_OpenSpeedTest.pid"
+OST_PORT=8888
+OST_REQUIRED_MB=40         # flash: the extracted app is ~31M; streaming/staging avoids the old
+                           # ~61M zip+app peak, so 40 (with margin) is enough instead of 64.
+OST_TMP_REQUIRED_MB=32     # mirror path ONLY: a .zip can't be streamed (central dir at end), so its
+                           # ~30M archive is staged in /tmp (RAM) then extracted to flash.
+OST_URL_OFFICIAL="https://github.com/openspeedtest/Speed-Test/archive/refs/heads/main.tar.gz"
+OST_URL_MIRROR="https://fw.gl-inet.com/tools/script/Speed-Test-main.zip"
 
-    clear
-    print_centered_header "OpenSpeedTest Server Installation"
+_ost_installed() { [ -d "$OST_INSTALL_DIR/Speed-Test-main" ] && [ -f "$OST_CONFIG_PATH" ]; }
+_ost_running()   { [ -s "$OST_PID_FILE" ] && kill -0 "$(cat "$OST_PID_FILE" 2>/dev/null)" 2>/dev/null; }
+_ost_persisted() { grep -Fxq "$OST_INSTALL_DIR" /etc/sysupgrade.conf 2>/dev/null; }
 
-    # Check if we need to download (file missing OR invalid header)
-    if [ ! -f "$script_name" ] || ! grep -q "$expected_header" "$script_name"; then
-        _ost_fetch() { wget -q -O "$script_name" "$script_url" && [ -s "$script_name" ]; }
+# Effective MB free on the install partition. On a REINSTALL the current copy in
+# $OST_INSTALL_DIR/Speed-Test-main is cleared before the new one downloads, so credit its
+# footprint back - otherwise a reinstall falsely fails the space gate on a box already hosting it.
+_ost_free_mb() {
+    local p="$OST_INSTALL_DIR" free reclaim=0
+    [ -e "$OST_INSTALL_DIR" ] || p="/"
+    free=$(df -Pm "$p" 2>/dev/null | awk 'NR==2{print $4}'); case "$free" in ''|*[!0-9]*) free=0 ;; esac
+    if [ -d "$OST_INSTALL_DIR/Speed-Test-main" ]; then
+        reclaim=$(du -sm "$OST_INSTALL_DIR/Speed-Test-main" 2>/dev/null | awk '{print $1}')
+        case "$reclaim" in ''|*[!0-9]*) reclaim=0 ;; esac
+    fi
+    echo $((free + reclaim))
+}
 
-        if spin_run "Downloading OpenSpeedTest installer" _ost_fetch; then
-            rm -f "$SPIN_LOG" 2>/dev/null
-            chmod +x "$script_name"
-            print_success "Download successful."
-        else
-            rm -f "$SPIN_LOG" 2>/dev/null
-            print_error "Failed to download installer. Please check your connection."
-            rm -f "$script_name"
-            press_any_key
+# nginx config for the OpenSpeedTest vhost - kept VERBATIM from the upstream installer. The
+# error_page 405 =200 line is load-bearing: the browser's upload test POSTs to a static path, which
+# nginx would 405; rewriting that to 200 is what makes the upload measurement work. Do not "simplify".
+_ost_write_nginx_conf() {
+    cat > "$OST_CONFIG_PATH" <<EOF
+worker_processes  auto;
+worker_rlimit_nofile 100000;
+user nobody nogroup;
+
+events {
+    worker_connections 2048;
+    multi_accept on;
+}
+
+error_log  /var/log/nginx/error.log notice;
+pid        $OST_PID_FILE;
+
+http {
+    include       mime.types;
+    default_type  application/octet-stream;
+
+    server {
+        server_name _ localhost;
+        listen $OST_PORT;
+        root $OST_INSTALL_DIR/Speed-Test-main;
+        index index.html;
+
+        client_max_body_size 10000M;
+        error_page 405 =200 \$uri;
+        access_log off;
+        log_not_found off;
+        error_log /dev/null;
+        server_tokens off;
+        tcp_nodelay on;
+        tcp_nopush on;
+        sendfile on;
+        resolver 127.0.0.1;
+
+        location / {
+            add_header 'Access-Control-Allow-Origin' "*" always;
+            add_header 'Access-Control-Allow-Headers' 'Accept,Authorization,Cache-Control,Content-Type,DNT,If-Modified-Since,Keep-Alive,Origin,User-Agent,X-Mx-ReqToken,X-Requested-With' always;
+            add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS' always;
+            add_header Cache-Control 'no-store, no-cache, max-age=0, no-transform';
+            if (\$request_method = OPTIONS) {
+                add_header Access-Control-Allow-Credentials "true";
+                return 204;
+            }
+        }
+
+        location ~* ^.+\\.(?:css|cur|js|jpe?g|gif|htc|ico|png|html|xml|otf|ttf|eot|woff|woff2|svg)\$ {
+            access_log off;
+            expires 365d;
+            add_header Cache-Control public;
+            add_header Vary Accept-Encoding;
+        }
+    }
+}
+EOF
+}
+
+_ost_write_init() {
+    cat > "$OST_STARTUP_SCRIPT" <<EOF
+#!/bin/sh /etc/rc.common
+START=81
+STOP=15
+start() {
+    if netstat -tuln 2>/dev/null | grep -q ":$OST_PORT "; then
+        printf "Port $OST_PORT already in use. Cannot start OpenSpeedTest NGINX.\n"
+        return 1
+    fi
+    /usr/sbin/nginx -c $OST_CONFIG_PATH
+}
+stop() {
+    if [ -s $OST_PID_FILE ]; then
+        kill \$(cat $OST_PID_FILE) 2>/dev/null
+        rm -f $OST_PID_FILE
+    fi
+}
+EOF
+    chmod +x "$OST_STARTUP_SCRIPT"
+}
+
+# Dependencies - install ONLY if the command is missing (require_cmd -> apk/opkg-aware installer), so
+# untested firmware without them preinstalled still works. On a FRESH nginx install, disable the stock
+# nginx service + drop its default vhost so it can't clash with our port-$OST_PORT instance.
+_ost_deps() {
+    if ! command -v nginx >/dev/null 2>&1; then
+        install_package nginx-ssl "NGINX web server" || { print_error "Failed to install NGINX (nginx-ssl)."; return 1; }
+        command -v nginx >/dev/null 2>&1 || { print_error "NGINX still not available after install."; return 1; }
+        /etc/init.d/nginx stop >/dev/null 2>&1; /etc/init.d/nginx disable >/dev/null 2>&1
+        [ -f /etc/nginx/conf.d/default.conf ] && rm -f /etc/nginx/conf.d/default.conf
+    fi
+    require_cmd unzip unzip "unzip" || { print_error "Failed to install unzip."; return 1; }
+    require_cmd wget  wget  "wget"  || { print_error "Failed to install wget."; return 1; }
+    require_cmd timeout coreutils-timeout "timeout" >/dev/null 2>&1   # best-effort; upstream dep
+    return 0
+}
+
+_ost_choose_source() {   # sets OST_DL_URL + OST_DL_MODE; returns 1 if the user cancels with 0
+    # Plain 1./2. (not the menu keycaps) marks this as an inline sub-choice, not another menu. The
+    # choice is kept at GL.iNet's request - GitHub can be blocked in some regions, hence the mirror.
+    # Official is a .tar.gz we STREAM straight to disk; the mirror is a .zip (can't stream) that needs
+    # ~OST_TMP_REQUIRED_MB of /tmp to stage. Headline = free vs required on the FLASH pool (both
+    # sources' shared, persistent cost); the mirror's extra temp cost rides on its own line; the
+    # flash-vs-RAM detail lives in the main [?] Help. Precise per-pool gating is _ost_space_check's job.
+    local _free; _free=$(_ost_free_mb)
+    if _ost_installed; then
+        print_info "Choose a download source - ${_free} MB free (incl. current copy), ~${OST_REQUIRED_MB} MB required:"
+    else
+        print_info "Choose a download source - ${_free} MB free, ~${OST_REQUIRED_MB} MB required:"
+    fi
+    printf "   1. Official repository (github.com/openspeedtest)\n"
+    printf "   2. GL.iNet mirror (fw.gl-inet.com) (+%s MB temp)\n" "$OST_TMP_REQUIRED_MB"
+    printf "\nChoose download source [1-2/0]: "; read -r _src; printf "\n"
+    case "$_src" in
+        0) return 1 ;;
+        2) OST_DL_URL="$OST_URL_MIRROR";   OST_DL_MODE=zip ;;
+        *) OST_DL_URL="$OST_URL_OFFICIAL"; OST_DL_MODE=stream ;;
+    esac
+}
+
+# Space check - runs AFTER the source choice so it can validate the right thing: ~OST_REQUIRED_MB of
+# flash for either source, PLUS ~OST_TMP_REQUIRED_MB of /tmp (RAM) for the mirror (zip staging). If
+# flash is short, offer to relocate /www2 onto a mounted external drive (preserved from upstream).
+_ost_space_check() {
+    local path="$OST_INSTALL_DIR" avail mp ext ans tavail
+    [ -e "$OST_INSTALL_DIR" ] || path="/"
+    avail=$(_ost_free_mb)   # credits the current copy on a reinstall (cleared before download)
+    # The source-choice header already showed free vs required, so the happy path stays quiet -
+    # we only speak up when flash is short (warn + offer an external drive, or error out).
+    if [ "$avail" -lt "$OST_REQUIRED_MB" ]; then
+        print_warning "Only ${avail}MB free at $path - OpenSpeedTest needs ~${OST_REQUIRED_MB}MB."
+        print_info "Searching mounted external drives for space."
+        for mp in $(awk '$2 ~ /^\/mnt\//{print $2}' /proc/mounts 2>/dev/null); do
+            ext=$(df -Pm "$mp" 2>/dev/null | awk 'NR==2{print $4}'); case "$ext" in ''|*[!0-9]*) ext=0 ;; esac
+            if [ "$ext" -ge "$OST_REQUIRED_MB" ]; then
+                printf "Use external drive %s (%sMB free) via a %s symlink? [y/N]: " "$mp" "$ext" "$OST_INSTALL_DIR"
+                read -r ans; printf "\n"
+                case "$ans" in
+                    y|Y) OST_INSTALL_DIR="$mp/openspeedtest"; mkdir -p "$OST_INSTALL_DIR"; ln -sf "$OST_INSTALL_DIR" /www2
+                         print_success "Symlink created: /www2 -> $OST_INSTALL_DIR"; avail="$ext"; break ;;
+                esac
+            fi
+        done
+        [ "$avail" -ge "$OST_REQUIRED_MB" ] || { print_error "Not enough space to install OpenSpeedTest. Free up space or attach a drive, then retry."; return 1; }
+    fi
+    # Mirror stages its zip in /tmp (RAM) - the official (streamed) path needs no temp.
+    if [ "${OST_DL_MODE:-stream}" = zip ]; then
+        tavail=$(df -Pm /tmp 2>/dev/null | awk 'NR==2{print $4}'); case "$tavail" in ''|*[!0-9]*) tavail=0 ;; esac
+        if [ "$tavail" -lt "$OST_TMP_REQUIRED_MB" ]; then
+            print_error "The GL.iNet mirror needs ~${OST_TMP_REQUIRED_MB}MB of temp space (/tmp) to stage its zip, but only ${tavail}MB is free."
+            print_info "Pick the Official source (streamed, no temp), or free up /tmp and retry."
             return 1
         fi
     fi
+    return 0
+}
 
-    # Execute the script
-    print_info "Launching installer"
-    printf "\n"
-    sleep 2
-    
-    # Check for execution bit just in case
-    [ ! -x "$script_name" ] && chmod +x "$script_name"
-    
-    ./"$script_name"
-    
-    # Handle post-execution status
-    if [ $? -eq 0 ]; then
-        print_success "OpenSpeedTest setup sequence finished."
+_ost_do_install() {
+    _ost_deps || { press_any_key; return 1; }
+    _ost_choose_source || { print_info "Install cancelled."; press_any_key; return 1; }
+    _ost_space_check || { press_any_key; return 1; }
+    # Stop any running instance first (fresh install / reinstall).
+    _ost_running && { "$OST_STARTUP_SCRIPT" stop >/dev/null 2>&1; }
+    mkdir -p "$OST_INSTALL_DIR"
+    [ -d "$OST_INSTALL_DIR/Speed-Test-main" ] && rm -rf "$OST_INSTALL_DIR/Speed-Test-main"
+    if [ "${OST_DL_MODE:-stream}" = stream ]; then
+        # Official: stream the .tar.gz straight into the docroot - no archive ever lands on flash,
+        # so peak flash use is just the ~31M extracted app (not zip + app).
+        _ost_stream() { wget -O - "$OST_DL_URL" 2>/dev/null | tar -xz -C "$OST_INSTALL_DIR" 2>/dev/null; [ -d "$OST_INSTALL_DIR/Speed-Test-main" ]; }
+        if ! spin_run "Downloading + extracting OpenSpeedTest" _ost_stream; then
+            print_error "Download/extract failed - check the router's internet connection, then retry."; rm -rf "$OST_INSTALL_DIR/Speed-Test-main"; press_any_key; return 1
+        fi
     else
-        print_warning "Installer exited with a non-zero status."
+        # Mirror: a .zip can't be streamed (central directory is at the end), so stage it in /tmp (RAM),
+        # extract to flash, then drop the temp zip - flash peak stays at just the extracted app.
+        _ost_fetch_zip() { wget -O /tmp/ost_main.zip "$OST_DL_URL" >/dev/null 2>&1 && [ -s /tmp/ost_main.zip ]; }
+        _ost_extract()   { unzip -o /tmp/ost_main.zip -d "$OST_INSTALL_DIR" >/dev/null 2>&1; rm -f /tmp/ost_main.zip; [ -d "$OST_INSTALL_DIR/Speed-Test-main" ]; }
+        if ! spin_run "Downloading OpenSpeedTest" _ost_fetch_zip; then
+            print_error "Download failed - check the router's internet connection, then retry."; rm -f /tmp/ost_main.zip; press_any_key; return 1
+        fi
+        if ! spin_run "Extracting" _ost_extract; then
+            print_error "Extract failed - the download may be incomplete. Retry."; rm -f /tmp/ost_main.zip; press_any_key; return 1
+        fi
     fi
-
+    _ost_write_nginx_conf
+    _ost_write_init
+    "$OST_STARTUP_SCRIPT" enable >/dev/null 2>&1
+    spin_run "Starting OpenSpeedTest" "$OST_STARTUP_SCRIPT" start
+    sleep 1
+    if _ost_running; then
+        print_success "OpenSpeedTest is running at ${CYAN}http://$(get_lan_ip):$OST_PORT${RESET}"
+    else
+        print_error "OpenSpeedTest did not start - port $OST_PORT may be in use. Run Diagnostics."
+    fi
     press_any_key
+}
+
+_ost_diagnose() {
+    local ip; ip=$(get_lan_ip)
+    printf " %bOpenSpeedTest diagnostics%b\n\n" "$CYAN" "$RESET"
+    if _ost_running; then print_success "Service is running (PID $(cat "$OST_PID_FILE"))."
+    else print_error "Service is NOT running."; fi
+    if netstat -tuln 2>/dev/null | grep -q ":$OST_PORT "; then
+        print_success "Port $OST_PORT is listening."
+        print_info "Open ${CYAN}http://$ip:$OST_PORT${RESET} in a browser on this network."
+    else
+        print_error "Port $OST_PORT is not listening."
+    fi
+    press_any_key
+}
+
+_ost_uninstall() {
+    print_warning "This removes OpenSpeedTest: the service, its nginx config, and $OST_INSTALL_DIR."
+    printf "Uninstall OpenSpeedTest? [y/N]: "; read -r _c; printf "\n"
+    case "$_c" in y|Y) ;; *) print_info "Uninstall cancelled."; press_any_key; return ;; esac
+    _ost_running && "$OST_STARTUP_SCRIPT" stop >/dev/null 2>&1
+    [ -f "$OST_STARTUP_SCRIPT" ] && { "$OST_STARTUP_SCRIPT" disable >/dev/null 2>&1; rm -f "$OST_STARTUP_SCRIPT"; }
+    [ -f "$OST_CONFIG_PATH" ] && rm -f "$OST_CONFIG_PATH"
+    # /www2 may be a symlink to an external drive - remove the target contents then the link.
+    if [ -L /www2 ]; then rm -rf "$(readlink -f /www2)" 2>/dev/null; rm -f /www2
+    elif [ -d "$OST_INSTALL_DIR" ]; then rm -rf "$OST_INSTALL_DIR"; fi
+    _ost_persist_set 0 quiet
+    print_success "OpenSpeedTest uninstalled."
+    press_any_key
+}
+
+_ost_persist_set() {   # <1|0> [quiet] - add/remove OpenSpeedTest paths from sysupgrade.conf
+    local on="$1" quiet="$2" sc=/etc/sysupgrade.conf svc p
+    svc=$(basename "$OST_STARTUP_SCRIPT")
+    # Always clear first (idempotent), then re-add when enabling.
+    for p in "$OST_INSTALL_DIR" "$OST_STARTUP_SCRIPT" "$OST_CONFIG_PATH"; do sed -i "\|$p|d" "$sc" 2>/dev/null; done
+    sed -i "\|/etc/rc.d/[SK].*$svc|d" "$sc" 2>/dev/null
+    if [ "$on" = 1 ]; then
+        for p in "$OST_INSTALL_DIR" "$OST_STARTUP_SCRIPT" "$OST_CONFIG_PATH"; do echo "$p" >> "$sc"; done
+        find /etc/rc.d/ -type l -name "[SK]*$svc" 2>/dev/null | while read -r l; do echo "$l" >> "$sc"; done
+        [ "$quiet" = quiet ] || { print_success "Persistence enabled (survives firmware upgrades)."; press_any_key; }
+    else
+        [ "$quiet" = quiet ] || { print_success "Persistence disabled."; press_any_key; }
+    fi
+}
+
+show_openspeedtest_help() {
+    show_paged "OpenSpeedTest Server - Help" << 'HELPEOF'
+OpenSpeedTest Server - Quick Help
+
+What it does
+────────────
+Hosts the OpenSpeedTest web app on this router so you can test LAN/Wi-Fi speed
+between a device and the router from any browser - no internet needed, no app.
+It runs its own nginx instance on port 8888 (separate from the admin panel).
+
+Options
+───────
+  • Install / Reinstall: installs any missing dependencies (nginx, unzip, wget),
+    then downloads the web app from your chosen source. It offers a mounted
+    external drive if the internal flash is short, writes the nginx config +
+    service, and starts it. Re-running refreshes the app and restarts the service.
+  • Diagnostics: reports whether the service is running and the port is listening,
+    and shows the URL to open.
+  • Uninstall: stops the service and removes the app, config, and service script.
+  • Persistence: keep OpenSpeedTest across a firmware upgrade (adds its files to
+    the sysupgrade backup). Off by default to save space.
+
+Space needed
+────────────
+The install screen's "N MB free, ~40 MB required" is the FLASH cost - the
+extracted app is ~31MB and lands in /www2 (permanent storage). Both sources
+share that cost. The two sources differ in HOW they download:
+  • Official (github.com/openspeedtest): a tarball STREAMED straight to flash -
+    nothing is staged, so it needs no temp space. Lightest footprint.
+  • GL.iNet mirror (for regions where GitHub is blocked): a zip that can't be
+    streamed, so it is first staged in /tmp (RAM) before unpacking - hence the
+    extra "+32 MB temp" on that line. That RAM is freed once install finishes.
+Both pools are checked precisely after you choose; if flash is short you can
+point /www2 at a mounted drive, and if /tmp is short pick the Official source.
+
+Using it
+────────
+Open http://<router-LAN-IP>:8888 in a browser on the same network, then press
+Start. For an accurate result use a wired or 5/6GHz client - the test measures
+the path between your device and the router.
+HELPEOF
+}
+
+manage_openspeedtest() {
+    while true; do
+        clear
+        print_centered_header "OpenSpeedTest Server"
+        local ip; ip=$(get_lan_ip)
+        local svc inst per url
+        _ost_running   && svc="${GREEN}RUNNING${RESET}"   || svc="${RED}STOPPED${RESET}"
+        _ost_installed && inst="${GREEN}YES${RESET}"       || inst="${YELLOW}NO${RESET}"
+        _ost_persisted && per="${GREEN}YES${RESET}"        || per="${GREY}NO${RESET}"
+        printf " %b\n" "${CYAN}STATUS${RESET}"
+        printf "   Installed:   %b\n" "$inst"
+        printf "   Service:     %b%s\n" "$svc" "$(_ost_running && printf ' (port %s)' "$OST_PORT")"
+        printf "   Persist:     %b\n" "$per"
+        if _ost_running; then printf "   Direct URL:  %b\n\n" "${CYAN}http://${ip}:${OST_PORT}${RESET}"
+        else printf "   Direct URL:  %b\n\n" "${GREY}(service not running)${RESET}"; fi
+
+        printf "%s%sInstall / Reinstall\n" "$N1" "$NSEP"
+        printf "%s%sDiagnostics\n" "$N2" "$NSEP"
+        printf "%s%sUninstall\n" "$N3" "$NSEP"
+        _ost_persisted && printf "%s%sDisable persistence\n" "$N4" "$NSEP" || printf "%s%sEnable persistence\n" "$N4" "$NSEP"
+        printf "%s%sBack\n" "$N0" "$NSEP"
+        printf "%s Help\n" "$NQ"
+        printf "\nChoose [1-4/0/?]: "
+        read -r _o; printf "\n"
+        case "$_o" in
+            1) _ost_do_install ;;
+            2) _ost_diagnose ;;
+            3) _ost_uninstall ;;
+            4) _ost_persisted && _ost_persist_set 0 || _ost_persist_set 1 ;;
+            0) return ;;
+            \?|h|H|❓) show_openspeedtest_help ;;
+            *) print_error "Invalid option"; sleep 1 ;;
+        esac
+    done
 }
 
 # -----------------------------

@@ -2,7 +2,7 @@
 # GL.iNet Router Toolkit
 # Author: phantasm22
 # License: GPL-3.0
-# Version: 2026-10-23
+# Version: 2026-11-10
 #
 # ── Versioning (bump the line above before every push to GitHub) ─────────────
 # The self-updater compares this value as a plain string (test's \> operator),
@@ -2444,7 +2444,7 @@ agh_clear_filter_cache() {
 agh_service_restart() {
     printf "\n"
     if ! is_agh_running; then
-        print_info "AdGuardHome is disabled - enable it from the Control Center (item 1) first"
+        print_info "AdGuardHome is disabled - enable it first (AdGuardHome Control Center → Enable AdGuardHome)"
         press_any_key
         return
     fi
@@ -3345,7 +3345,7 @@ agh_update_now() {
     conf=$(get_agh_config); wd=$(get_agh_workdir)
     if [ -z "$conf" ] || [ -z "$wd" ]; then
         print_error "config.yaml is missing"
-        print_info "Use Recover Configuration in the Control Center (item 1) first"
+        print_info "Recover the configuration first (AdGuardHome Control Center → Recover Configuration)"
         press_any_key; return
     fi
     # Staging is on the workdir's filesystem (see above): the ~11 MB package + the ~34 MB new binary,
@@ -3633,7 +3633,7 @@ _agh_persist_disp() { _row_value "Persistence|$(_agh_persist_row)"; }
 _agh_config_notice() {
     [ "${agh_config_missing:-0}" = 1 ] || return 0
     if [ "$1" = web ]; then printf '%s\n' "error|AdGuardHome Config is missing: the Backup & Recovery tab restores a backup, or Reset to\nFactory Settings starts over"
-    else printf '%s\n' "error|AdGuardHome Config is missing: [4] Backup & Recovery Suite restores a backup, or [CL] Reset to\nFactory Settings starts over"; fi
+    else printf '%s\n' "error|AdGuardHome Config is missing: Backup & Recovery Suite (option 4) restores a backup,\nor Reset to Factory Settings (option CL) starts over"; fi
 }
 # ...and what that yellow DISABLED means, as the screen's notice (menu + page)
 _agh_persist_notice() {
@@ -3654,7 +3654,7 @@ _agh_fw_prompt() {   # after a build change: offer persistence only when the ris
     print_warning "After a firmware update, AdGuardHome won't start: the firmware puts back\nGL.iNet's v$(_agh_rom_ver), which can't read this config.yaml"
     printf "Keep this version across firmware updates? [Y/n]: "; read_ans AGH_ANS_KEEP; c=$REPLY; printf "\n"
     case "$c" in
-        n|N|0) print_info "Choose Enable Persistence in Updates & Channel before any firmware update" ;;
+        n|N|0) print_info "Enable persistence before any firmware update\n(AdGuardHome Control Center → Advanced Settings → Updates & Channel → Enable Persistence)" ;;
         *)   _agh_persist_set on; _persist_msg on "AdGuardHome updates" ;;
     esac
 }
@@ -3686,7 +3686,7 @@ _agh_channel_switch() {   # <beta|release> [recover]
     conf=$(get_agh_config)
     if [ -z "$conf" ]; then
         print_error "config.yaml is missing"
-        print_info "Use Recover Configuration in the Control Center (item 1) first"
+        print_info "Recover the configuration first (AdGuardHome Control Center → Recover Configuration)"
         press_any_key; return
     fi
     arch=$(_agh_dl_arch)
@@ -3871,7 +3871,7 @@ manage_agh_ui_updates() {
                     rm -f "$(_agh_upd_file)"; spin_run "Checking for updates" _agh_upd_check; agh_update_state
                     case "$AGH_UPD" in
                         UPTODATE)  print_success "AdGuardHome is up to date (v$(_agh_cur_ver))" ;;
-                        AVAILABLE) print_info "v$AGH_UPD_VER is available - choose Update to v$AGH_UPD_VER" ;;
+                        AVAILABLE) print_info "v$AGH_UPD_VER is available - choose Update to v$AGH_UPD_VER (option 4)" ;;
                         *)         fail_report "Couldn't reach AdGuard's update server" "" "Check the router's internet connection, then retry" ;;
                     esac
                     press_any_key
@@ -4564,7 +4564,7 @@ EOF
         if [ "$_zr" != "n" ] && [ "$_zr" != "N" ]; then
             printf "\n"
             zram_install_enable
-            print_info "Manage this later in AdGuardHome -> Advanced Settings -> Zram Swap"
+            print_info "Manage this later (AdGuardHome Control Center → Advanced Settings → Zram Swap)"
         fi
     fi
 
@@ -4589,7 +4589,7 @@ EOF
             if [ "$_sl" = "y" ] || [ "$_sl" = "Y" ]; then
                 printf "\n"
                 agh_remove_filter_limit && _agh_storage_over=0
-                print_info "Manage this later in AdGuardHome -> Advanced Settings -> Filter Storage Space Limit"
+                print_info "Manage this later (AdGuardHome Control Center → Advanced Settings → Filter Storage Space Limit)"
             fi
         fi
     fi
@@ -5170,7 +5170,7 @@ agh_creds_remove() {   # users: [] - the dashboard's own login goes
 _agh_creds_need_config() {
     printf "\n"
     print_error "config.yaml is missing, so the Web UI credentials can't be changed"
-    print_info "Use Recover Configuration in the Control Center (item 1)"
+    print_info "Recover the configuration (AdGuardHome Control Center → Recover Configuration)"
     press_any_key
 }
 
@@ -5350,7 +5350,7 @@ LOGS & MAINTENANCE:
    - LOGS: Real-time 'logread' stream for diagnostic observation.
    - CACHE: Flushes filter data to resolve download/checksum errors.
    - RESTART: Bounces the running daemon to reload config.yaml or clear a
-     wedge. If the service is disabled, it points you to item 1 to enable it.
+     wedge. If the service is disabled, it points you to Enable AdGuardHome.
 
 FACTORY RESET: Reconstructs the environment using read-only firmware
    defaults located in the /rom partition.
@@ -5788,7 +5788,7 @@ Notes
     where they're kept: "2 (0.01M used, 56.5G free)".
   • Backups are timestamped, so you can keep several and roll back to any one
     if a change goes wrong.
-  • With no backups yet, item 2 is Check for Backups - it re-scans the store.
+  • With no backups yet, Check for Backups re-scans the store.
   • They are stored centrally in /etc/glinet_utils/backups and survive a reboot;
     older in-place backups are moved there automatically.
   • A firmware update can replace the binary and script; restore a backup to
@@ -5853,9 +5853,9 @@ When to use
     if it was running, so every list is fetched fresh. Use it when a list
     looks stale.
   • Restart - to reload config.yaml or clear a wedge without a full disable/
-    enable. Works while running; if disabled, it points you to item 1 to enable.
+    enable. Works while running; if disabled, it points you to Enable AdGuardHome.
 
-Note: enabling and disabling the service is on the Control Center (item 1);
+Note: enabling and disabling the service is on the AdGuardHome Control Center;
 restart is an operational bounce and lives here.
 HELPEOF
 }
@@ -5982,7 +5982,7 @@ sub_confirm_factory_reset() {
         fi
     else
         print_success "AdGuardHome reset to factory settings"
-        print_info "It's switched off - enable it from the Control Center (item 1)"
+        print_info "AdGuardHome is disabled - enable it first (AdGuardHome Control Center → Enable AdGuardHome)"
     fi
     press_any_key
 }
@@ -6390,8 +6390,9 @@ Important notes:
 • Data in zram is lost on reboot (normal for swap)
 • Routers with 512MB flash or less will have a forced limit for AdGuardHome allow/block lists.
 
-Reach this screen from System Tweaks, or from AdGuardHome -> Advanced Settings
--> Zram Swap (it pairs with the filter storage-space limit).
+Reach this screen from System Tweaks → Manage Zram Swap, or from AdGuardHome
+Control Center → Advanced Settings → Zram Swap (it pairs with the filter
+storage-space limit).
 
 Status + actions (the menu is context-aware - it shows only what applies):
 ─────────────────────────────────────────────────────────────────────────
@@ -6628,8 +6629,8 @@ wiping them (and a factory reset drops only the Fan patch). The panel picks up
 the change on your next visit - no refresh needed (the bundle is re-hashed so the
 browser fetches it fresh).
 
-Persistence (option 8):
-───────────────────────
+Persistence:
+────────────
 Reboots are always fine. A firmware upgrade resets the Admin Panel, dropping
 the fan setpoint patch, and forgets a static speed. Turn on "Enable
 Persistence" (a setpoint or a static speed must be set first) and a small boot
@@ -6971,7 +6972,7 @@ manage_fan_settings() {
                         if spin_run "Setting the fan to $pct%" _fan_static_set "$pct"; then
                             print_success "Fan held at $pct% - kept across reboots"
                         else
-                            fail_report "The fan didn't take the $pct% setting" "" "Try again, or choose Enable Dynamic Fan Control"
+                            fail_report "The fan didn't take the $pct% setting" "" "Try again, or choose Enable Dynamic Fan Control (option 2)"
                         fi
                     else
                         print_error "Invalid input"
@@ -7720,7 +7721,7 @@ offload_platform() { [ -f /etc/config/ecm ] && { echo qualcomm-ecm; return; }; [
 _nl_hw_notice() {
     [ "$(offload_state)" = on ] && netlimit_any_limited || return 0
     if [ "$1" = web ]; then printf 'warning|%s' "HW Acceleration is on: it bypasses every limit - Disable HW Acceleration to enforce them"
-    else printf 'warning|%s' "HW Acceleration is on: it bypasses every limit - [H] to enforce them"; fi
+    else printf 'warning|%s' "HW Acceleration is on: it bypasses every limit -\nDisable HW Acceleration (option H) to enforce them"; fi
 }
 offload_state() {
     if [ -f /etc/config/ecm ]; then [ "$(uci -q get ecm.global.enabled)" = "1" ] && echo on || echo off; return; fi
@@ -8675,7 +8676,7 @@ Toggle Button Settings page lets you ASSIGN a function to it, but never shows wh
 way it is actually flipped. This overlay fills that gap: on that page it fills the
 currently-selected side's toggle GREEN, greens its LEFT/RIGHT label, and tags it
 "current position". The overlay itself never moves the switch or changes a setting;
-option 3 below lets you ASSIGN the switch's function, the same as GL's own page.
+Set Toggle Button Function assigns the switch's function, the same as GL's page.
 
 The STATUS lines
 ────────────────
@@ -8737,7 +8738,7 @@ Notes
 • Install/remove appears on your next visit to the panel - no refresh needed
   (the toolkit re-hashes the bundle so the browser fetches it fresh).
 • The overlay survives a reboot; a firmware UPGRADE resets the panel. Turn on
-  "Enable Persistence" (option 4) to have it re-applied automatically, or re-install
+  "Enable Persistence" to have it re-applied automatically, or re-install
   by hand after upgrading (same as the other Web-UI tweaks).
 HELPEOF
 }
@@ -9594,7 +9595,7 @@ _glpersist_show_report() {
     while IFS='|' read -r tag a b; do
         case "$tag|$a" in
             switch\|ok)   print_success "Switch position indicator restored" ;;
-            switch\|fail) print_error   "Switch position indicator not restored - re-enable it in System Tweaks" ;;
+            switch\|fail) print_error   "Switch Position Indicator not restored - re-enable it\n(System Tweaks → Switch Position Indicator)" ;;
             fan\|ok)      print_success "Fan control restored" ;;
             fan\|fail)    print_error   "Fan control not restored - set it again in System Tweaks → Device Fan Settings" ;;
             fanstatic\|ok)   print_success "Fan held at its static speed" ;;
@@ -9602,7 +9603,7 @@ _glpersist_show_report() {
             ttyd\|ok)     print_success "Web Terminal restored" ;;
             ost\|ok)      print_success "OpenSpeedTest restored" ;;
             ost\|fail)    print_error   "OpenSpeedTest not restored$( [ "$b" = nginx ] && echo ' - nginx could not be re-installed')" ;;
-            ttyd\|fail)   print_error   "Web Terminal not restored - re-enable it in System Tweaks" ;;
+            ttyd\|fail)   print_error   "Web Terminal not restored - re-enable it (System Tweaks → Web-UI Terminal Interface)" ;;
             pkg\|*)       if [ "$b" = ok ]; then print_success "Package re-installed: $a"
                           elif grep -qx "pkg|$a|fail|nofeed" "$GLPERSIST_REPORT"; then print_error "Package not re-installed: $a - this firmware's package feed doesn't offer it"
                           else print_error "Package not re-installed: $a - install it again in\nSystem Tweaks → Package and Persistence Manager"; fi ;;
@@ -9923,11 +9924,23 @@ _pkg_in_feed() {   # <pkg> - does the package feed (already updated) offer it?
     if [ "$(pkg_mgr)" = apk ]; then apk search -x "$1" 2>/dev/null | grep -q .
     else opkg list "$1" 2>/dev/null | grep -q "^$1 "; fi
 }
+# Every configured opkg feed has its downloaded list. pkg_update returns 0 even when one feed failed to download, so
+# "updated" alone isn't enough: on .12.1 (2026-11-03, 4.10.1) the boot pass missed GL's kmod feed and zram-swap couldn't
+# find kmod-zram, though GL's feed has it. apk update fails by itself when a repository can't be read.
+_pkg_feeds_complete() {
+    [ "$(pkg_mgr)" = apk ] && return 0
+    local d="${PKG_LISTS_DIR:-/var/opkg-lists}" f
+    [ -d "$d" ] || d=/tmp/opkg-lists
+    for f in $(awk '$1 == "src" || $1 == "src/gz" { print $2 }' ${PKG_FEEDS_CONF:-/etc/opkg.conf /etc/opkg/*.conf} 2>/dev/null); do
+        [ -e "$d/$f" ] || return 1
+    done
+}
 _glpersist_pkgs_restore() {
     local p n=0 flag=/tmp/.glpersist_pkgs.running
     [ -s "$(_lazlist)" ] || return 0
     : > "$flag"
-    until pkg_update >/dev/null 2>&1; do
+    # the feeds come back a few seconds apart after a boot: wait until every one has its list
+    until pkg_update >/dev/null 2>&1 && _pkg_feeds_complete; do
         n=$((n + 1)); [ "$n" -ge "${GLPERSIST_NET_TRIES:-45}" ] && break; sleep "${GLPERSIST_NET_WAIT:-20}"
     done
     for p in $(cat "$(_lazlist)"); do
@@ -11677,7 +11690,7 @@ manage_toolkit() {
                 ;;
             2)
                 if ! toolkit_is_installed; then
-                    print_error "Not installed — install first (option 1)"
+                    print_error "Not installed - install first (option 1)"
                     sleep 2; continue
                 fi
                 if toolkit_persistence_enabled; then
@@ -12004,11 +12017,19 @@ M.job_poll = function(params)
     if st and off < st then off = st end
     if en then limit = math.max(0, math.min(limit, en - off)) end
     f:seek("set", off)
-    local text = limit > 0 and (f:read(limit) or "") or ""
+    local raw = limit > 0 and (f:read(limit) or "") or ""
     f:close()
+    -- only whole lines move the offset on; the line still being written (a spinner's progress, a question waiting for
+    -- its answer) comes back as `partial`, which the page redraws in place. Appended, the next read's redraw of that
+    -- same line landed after it ("Downloading the firmware 54% of 103 MB - Downloading the firmware", .12.1 2026-11-03)
+    local cut = raw:match(".*\n()")
+    local text, partial = raw, ""
+    if cut then text, partial = raw:sub(1, cut - 1), raw:sub(cut)
+    elseif #raw < limit then text, partial = "", raw end     -- a line longer than one read goes out whole
     local nextoff = off + #text
     -- a spinner redraws its line with \r: keep what a terminal would show (the text after the last \r)
-    text = text:gsub("\27%[[%d;?]*%a", ""):gsub("\r\n", "\n"):gsub("[^\n]*\r([^\r\n]*)", "%1")
+    local function shown(t) return (t:gsub("\27%[[%d;?]*%a", ""):gsub("\r\n", "\n"):gsub("[^\n]*\r([^\r\n]*)", "%1")) end
+    text, partial = shown(text), shown(partial)
     local rc = tonumber((slurp(dir .. "/rc") or ""):match("%d+"))
     local running = false
     if not rc then
@@ -12041,7 +12062,7 @@ M.job_poll = function(params)
             else outcome = "done" end
         end
     end
-    return { ok = true, id = params.id, title = slurp(dir .. "/title") or "", text = text, offset = nextoff,
+    return { ok = true, id = params.id, title = slurp(dir .. "/title") or "", text = text, partial = partial, offset = nextoff,
              running = running, rc = rc, outcome = outcome, started = tonumber(slurp(dir .. "/started") or ""),
              ended = (slurp(dir .. "/ended") or ""):match("[^\n]+"),
              interactive = io.open(dir .. "/interactive", "r") ~= nil }
@@ -12436,6 +12457,7 @@ const URLP = new URLSearchParams(location.search);
 let SCREEN = URLP.get("s") || "hardware";
 
 class SignedOut extends Error {}
+class Dropped extends Error {}    // the connection dropped before an answer came back (see rpc)
 class PageGone extends Error {}   // GL's /rpc no longer has the toolkit: the page was turned off (here or in a terminal)
 let leaving = false;              // on the way to GL's home after turning the page off - nothing else to say
 // GL's /rpc decodes and re-encodes the toolkit's JSON, which turns an empty array into {}
@@ -12506,16 +12528,27 @@ function sid() {
   return m ? decodeURIComponent(m[1]) : "";
 }
 
-// GL's own /rpc: the session id rides in the call, so only a signed-in admin reaches the toolkit
-async function rpc(method, params) {
+// GL's own /rpc: the session id rides in the call, so only a signed-in admin reaches the toolkit.
+// A dropped connection (Safari: "Load failed") is Dropped. GL's web server closes an idle connection after 8 s, and a
+// click that lands as it closes never reaches the router (.12.1 2026-11-03: Install Selected Build) - so a call that is
+// safe to send twice tries once more: reads (get_*, job_poll) and what a caller marks `retry` (read actions, job starts:
+// the router refuses a second start while one runs). Anything else reports the drop instead of risking a double run.
+async function rpc(method, params, retry) {
   const s = sid();
   if (!s) throw new SignedOut();
-  const r = await fetch("/rpc", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: ++seq, method: "call", params: [s, "glutils", method, params || {}] })
-  });
-  const j = await r.json();
+  if (retry === undefined) retry = /^get_|^job_poll$/.test(method);
+  let j;
+  try {
+    const r = await fetch("/rpc", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: ++seq, method: "call", params: [s, "glutils", method, params || {}] })
+    });
+    j = await r.json();
+  } catch (e) {
+    if (retry) { await new Promise((ok) => setTimeout(ok, 300)); return rpc(method, params, false); }
+    throw new Dropped(e.message);
+  }
   if (j.error) {
     if (j.error.code === ACCESS_DENIED) throw new SignedOut();
     if (j.error.code === -32601) throw new PageGone();   // "Method not found": the toolkit's /rpc module is gone
@@ -12775,6 +12808,8 @@ function failed(e, what) {
   if (e instanceof SignedOut) return signedOut();
   if (e instanceof PageGone) return pageGone();
   loading(false);
+  // the connection dropped: the router may never have seen the request - not "didn't answer"
+  if (e instanceof Dropped) return banner({ tone: "error", text: what ? what + " - the connection to the router dropped" : "The connection to the router dropped - try again" });
   banner({ tone: "error", text: (what || "The router didn't answer") + " - " + e.message });
 }
 
@@ -13549,7 +13584,7 @@ const gen = {
     return w;
   },
   readKey(a, args) { return ["read", SCREEN, gen.tab || "", a.id, JSON.stringify(args || {})].join("|"); },
-  readCall(a, args) { return () => rpc("do_act", { screen: SCREEN, tab: gen.tab, action: a.id, confirmed: false, args: args }); },
+  readCall(a, args) { return () => rpc("do_act", { screen: SCREEN, tab: gen.tab, action: a.id, confirmed: false, args: args }, true); },
   // a read action (release notes, the change log): its text in the overlay - the screen stays as it is
   async read(a, args) {
     let said = false;
@@ -13584,7 +13619,8 @@ const gen = {
     if (a.mode !== "job" && a.mode !== "ijob") banner({ tone: "info", text: a.label + " - working" });
     document.querySelectorAll("#content button, #pageActions .gen").forEach((b) => { b.disabled = true; });
     try {
-      const res = await rpc("do_act", { screen: SCREEN, tab: gen.tab, action: a.id, confirmed: confirmed, args: args });
+      const res = await rpc("do_act", { screen: SCREEN, tab: gen.tab, action: a.id, confirmed: confirmed, args: args },
+                            a.mode === "read" || a.mode === "job" || a.mode === "ijob");
       busy = false;
       if (res.ok === false && !res.cards) { banner(res.message); document.querySelectorAll("#content button").forEach((b) => { b.disabled = false; }); return; }
       banner(res.message);
@@ -13601,7 +13637,7 @@ const gen = {
       if ((a.mode === "job" || a.mode === "ijob") && $("jobCard")) $("jobCard").scrollIntoView({ behavior: "smooth", block: "center" });
       // a log you asked to watch IS the content: open it
       if (a.id === "watch" && $("jobCard")) gen.logOpen(true);
-    } catch (e) { busy = false; failed(e); }
+    } catch (e) { busy = false; document.querySelectorAll("#content button, #pageActions .gen").forEach((b) => { b.disabled = false; }); failed(e); }
   },
   // ---- a job's log: GL's log viewer (Refresh-free: it follows the job every second while it runs) ----
   // the output (GL's log viewer) stays minimized - its state and latest line - and opens on demand, when it fails,
@@ -13662,7 +13698,12 @@ const gen = {
         const atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 8;
         let t = r.text || "";
         if (off === 0) t = t.replace(/^\s*\n/, "");
-        if (t) { box.append(document.createTextNode(t)); if (atEnd) box.scrollTop = box.scrollHeight; }
+        // finished lines go in once; the line still being written (progress, a question) is the box's last text node,
+        // replaced on every read
+        if (!box.tailNode) { box.tailNode = document.createTextNode(""); box.append(box.tailNode); }
+        if (t) box.insertBefore(document.createTextNode(t), box.tailNode);
+        box.tailNode.data = r.partial || "";
+        if (atEnd) box.scrollTop = box.scrollHeight;
         if (off === 0 && r.started) $("jobWhat").textContent = (r.title || "") + " - started " + new Date(r.started * 1000).toLocaleString();
         off = r.offset;
         const st = $("jobState");
@@ -14090,7 +14131,7 @@ webui_toggle() {
             fi ;;
         DISABLED)
             if ! _webui_toolkit_ok; then
-                print_error "The Admin Panel page needs a saved copy of the toolkit - install it first (item 1)"
+                print_error "The Admin Panel page needs a saved copy of the toolkit - install it first (option 1)"
             elif spin_run "Adding the toolkit to the Admin Panel" webui_enable; then
                 print_success "Admin Panel page enabled"
                 print_info "Choose Router Toolkit in the Admin Panel menu, or open $(webui_url)"
@@ -14441,7 +14482,7 @@ mtu_probe_render() {
         *)              applyval="$old_rec"; print_info "Falling back to the Calculated ${old_rec:-N/A}; this value was not actively verified" ;;
     esac
     if [ -n "$applyval" ] && [ -n "$cur" ] && [ "$cur" != "$applyval" ]; then
-        print_info "To apply $applyval, choose [1] Optimize Tunnel"
+        print_info "To apply $applyval, choose Optimize Tunnel (option 1)"
     elif [ -n "$applyval" ] && [ "$cur" = "$applyval" ] && { [ "$outcome" = confirm ] || [ "$outcome" = revise ]; }; then
         print_info "Current MTU already matches — nothing to change"
     fi
@@ -14774,7 +14815,7 @@ manage_mtu() {
                     _nr=$(cat "$tf.rec" 2>/dev/null); rm -f "$tf.rec"
                     if [ -z "$_nr" ]; then fail_report "Couldn't resolve the link under $iface, so there's no recommendation" "" "Check the tunnel's endpoint and the WAN connection, then retry"
                     elif [ "$_nr" = "$(mtu_get "$iface")" ]; then print_success "Recommended MTU is $_nr - already applied"
-                    else print_info "Recommended MTU is now $_nr - choose Optimize Tunnel"; fi
+                    else print_info "Recommended MTU is now $_nr - choose Optimize Tunnel (option 1)"; fi
                     press_any_key
                 fi ;;
             2)
@@ -16090,7 +16131,7 @@ rla_do_lever2() {
     if [ "$_dir" = out ]; then
         if [ "$A_RLAN" = unknown ]; then
             print_warning "The remote LAN subnet is not known yet"
-            print_info "Use option 2 first - a route needs a destination"
+            print_info "Detect or set it first (option 2) - a route needs a destination"
             press_any_key; return
         fi
         if guard_overlap "$A_LAN" "$A_RLAN"; then
@@ -17125,7 +17166,7 @@ _pr_recheck() {
     if [ "$PR_DB" != "CORRUPT" ] && [ "$PR_CACHE" != "CORRUPT" ] && [ "$PR_CACHE" != "EMPTY" ]; then
         print_success "No package system issues found"
     else
-        print_warning "Problems found - choose Repair Now"
+        if [ "$1" = web ]; then print_warning "Problems found - choose Repair Now"; else print_warning "Problems found - choose Repair Now (option 1)"; fi
     fi
     press_any_key
 }
@@ -17327,6 +17368,19 @@ _fw_cur() {
 _fw_chan_ord() { case "$1" in STABLE) echo 1 ;; BETA) echo 2 ;; NIGHTLY) echo 3 ;; RC) echo 4 ;; "OPENWRT 25") echo 5 ;; "OPENWRT 24") echo 6 ;; *) echo 7 ;; esac; }
 _fw_chan_color() { [ "$1" = STABLE ] && printf '%s' "$GREEN" || printf '%s' "$YELLOW"; }
 
+# A build's tag from its download file name: "e750-4.3.30_release6-445-1104-….tar" -> "release6", "…op24-beta1…" ->
+# "op24 beta1". GL's older names run the release number straight into the version's own digits with no separator
+# ("openwrt-e750-4.0-release10326-0408-….tar" is 4.3.26 release1 + "0326"), so a trailing run equal to the build's
+# version (x.y.z -> %02d%02d of y and z) is dropped - read from the version itself, not a guessed digit count.
+_fw_tag() {   # <file name> <version>
+    local t s
+    t=$(printf '%s' "$1" | grep -oE '(op2[0-9][_-])?(release|beta|rc|snapshot|nightly)[0-9]*' | head -1 | tr '_-' '  ')
+    [ -n "$t" ] || { printf '%s' "$1" | grep -oE 'op2[0-9]' | head -1; return 0; }
+    s=$(printf '%s' "${2%%-*}" | awk -F. 'NF == 3 && $0 ~ /^[0-9.]+$/ { printf "%02d%02d", $2, $3 }')
+    [ -n "$s" ] && case "$t" in *[0-9]"$s") t=${t%"$s"} ;; esac
+    printf '%s' "$t"
+}
+
 # Fetch the catalogue into $FW_TMP/cat, one build per line, channels in menu order, newest first:
 #   channel|label|name|link|sha256|size|epoch|build|date|version|stage|src
 # Returns 0 when GL's server answered (even with no builds for this model), 1 when unreachable.
@@ -17357,8 +17411,7 @@ _fw_catalog() {
                 *-open) case "$nm" in *op25*) chan="OPENWRT 25" ;; *op24*) chan="OPENWRT 24" ;; *) continue ;; esac ;;
                 *) case "$S" in RELEASE) chan=STABLE ;; TESTING) chan=BETA ;; SNAPSHOT|NIGHTLY) chan=NIGHTLY ;; RC) chan=RC ;; *) continue ;; esac ;;
             esac
-            tag=$(printf '%s' "$nm" | grep -oE '(op2[0-9][_-])?(release|beta|rc|snapshot|nightly)[0-9]*' | head -1 | tr '_-' '  ')
-            [ -n "$tag" ] || tag=$(printf '%s' "$nm" | grep -oE 'op2[0-9]' | head -1)
+            tag=$(_fw_tag "$nm" "$V")
             lbl="$V${tag:+ ($tag)}"
             bd=$(printf '%s' "$nm" | sed -n 's/.*[_-]\([0-9]\{3,5\}\)-[0-9]\{4\}-[0-9]\{9,11\}\.[a-z]*$/\1/p')
             ep=$(printf '%s' "$nm" | sed -n 's/.*-\([0-9]\{9,11\}\)\.[a-z]*$/\1/p')
@@ -17405,12 +17458,14 @@ _fw_table_rows() {
           printf "%s|%s|%s|%s|%s|%d|%s\n", $1, p, ch, lb, $10, int(($7 + 524288) / 1048576), d }'
 }
 _fw_direction() { printf '0|%s\n' "$1" | _fw_table_rows | cut -d'|' -f7; }   # <row> -> UPGRADE / DOWNGRADE / SAME
-# Update state for the INSTALLED channel: FW_UPD = AVAILABLE / UPTODATE / UNKNOWN, FW_UPD_ROW = the newest build.
+# Update state for the INSTALLED channel: FW_UPD = AVAILABLE / UPTODATE / NONE / UNKNOWN, FW_UPD_ROW = the newest build.
+# NONE: the catalogue was read but GL.iNet lists no build in this channel (a Flint 3 on BETA after the beta ended);
+# UNKNOWN is for a catalogue that couldn't be read at all.
 _fw_update_state() {
     FW_UPD=UNKNOWN; FW_UPD_ROW=""
     [ -s "$FW_TMP/cat" ] || return 0
     FW_UPD_ROW=$(awk -F'|' -v c="$FW_CUR_CHAN" '$1==c{print; exit}' "$FW_TMP/cat")
-    [ -n "$FW_UPD_ROW" ] || return 0
+    [ -n "$FW_UPD_ROW" ] || { FW_UPD=NONE; return 0; }
     [ "$(_fw_direction "$FW_UPD_ROW")" = UPGRADE ] && FW_UPD=AVAILABLE || FW_UPD=UPTODATE
 }
 # When GL.iNet's catalogue was read: the Update status is as of then (the page keeps it up to an hour; Check for
@@ -17428,6 +17483,7 @@ _fw_status_rows() {   # <items not persisted> <latest history state file or "">
     case "$FW_UPD" in
         AVAILABLE) echo "Update|AVAILABLE|yellow|$(_fw_build_plain "$(_fw_field "$FW_UPD_ROW" 2)")|1" ;;
         UPTODATE)  echo "Update|UP TO DATE|green||1" ;;
+        NONE)      echo "Update|NONE|grey|no $(printf '%s' "$FW_CUR_CHAN" | tr 'A-Z' 'a-z') builds|1" ;;
         *)         echo "Update|UNKNOWN|grey|offline|1" ;;
     esac
     ck=$(_fw_checked); [ -n "$ck" ] && echo "Checked|$ck|fact||1"
@@ -17446,7 +17502,7 @@ _fw_status_notices() {
     _agh_persist_notice; printf '\n'
     [ "${1:-0}" -gt 0 ] || return 0
     if [ "$3" = web ]; then printf '%s\n' "warning|Not Persisted is $1 ITEM$([ "$1" = 1 ] || echo S): a firmware update will remove them - keep them on the Packages\ntab, or leave Persist ticked when installing a build"
-    else printf '%s\n' "warning|Not Persisted is $1 ITEM$([ "$1" = 1 ] || echo S): a firmware update will remove them - [3] Manage Persistence keeps them"; fi
+    else printf '%s\n' "warning|Not Persisted is $1 ITEM$([ "$1" = 1 ] || echo S): a firmware update will remove them -\nManage Persistence (option 3) keeps them"; fi
 }
 
 # What a firmware update would NOT keep, measured against the router's own keep list (`sysupgrade -l`).
@@ -17867,7 +17923,7 @@ _fw_health() {   # <state-file> [show]
         if [ "$(_fw_st "$st" agh)" = running ]; then
             if is_agh_running; then _r OK "AdGuardHome: running"
             elif [ "$up" -lt 300 ]; then _r PENDING "AdGuardHome: still starting"
-            else _r ISSUE "AdGuardHome isn't running - the AdGuardHome Control Center (item 1) offers the fix"; fi
+            else _r ISSUE "AdGuardHome isn't running - AdGuardHome Control Center offers the fix"; fi
         fi
         for p in $(_fw_st "$st" limits); do
             # a limit on a switched-off network can't shape anything - it's kept, and applies when it's on
@@ -18447,9 +18503,9 @@ manage_firmware() {
                    spin_run "Checking for firmware updates" _fw_catalog; _fw_update_state
                    case "$FW_UPD" in
                        UPTODATE)  print_success "The firmware is up to date ($FW_CUR_LABEL, $FW_CUR_CHAN)" ;;
-                       AVAILABLE) print_info "$(_fw_field "$FW_UPD_ROW" 2) is available - choose Update to $(_fw_field "$FW_UPD_ROW" 2)" ;;
-                       *) if [ -s "$FW_TMP/cat" ]; then print_info "GL.iNet publishes no $FW_CUR_CHAN builds for this model - use Choose a Build"
-                          else fail_report "Couldn't reach GL.iNet's firmware server" "" "Check the router's internet connection, then retry"; fi ;;
+                       AVAILABLE) print_info "$(_fw_field "$FW_UPD_ROW" 2) is available - choose Update to $(_fw_field "$FW_UPD_ROW" 2) (option 1)" ;;
+                       NONE) print_info "GL.iNet publishes no $FW_CUR_CHAN builds for this model - choose another in Choose a Build (option 2)" ;;
+                       *) fail_report "Couldn't reach GL.iNet's firmware server" "" "Check the router's internet connection, then retry" ;;
                    esac
                    press_any_key
                fi ;;
@@ -18481,9 +18537,11 @@ The status block
 ────────────────
   • Channel - the firmware track the router is on: STABLE, BETA, NIGHTLY,
     RC, OPENWRT 25 or OPENWRT 24. Version and Update belong to it.
-  • Update - UP TO DATE, AVAILABLE (with the build), or UNKNOWN when GL.iNet's
-    server can't be reached. Checked, under it, is when GL.iNet's list was
-    read (the page keeps it up to an hour; Check for Updates reads it again).
+  • Update - UP TO DATE, AVAILABLE (with the build), NONE when GL.iNet lists
+    no build in this channel (Choose a Build offers the others), or UNKNOWN
+    when GL.iNet's server can't be reached. Checked, under it, is when
+    GL.iNet's list was read (the page keeps it up to an hour; Check for
+    Updates reads it again).
   • Not Persisted - how many items an update will remove, measured from the
     router's own keep list: the toolkit, its features and settings (Web
     Terminal, fan, switch indicator, limits, OpenSpeedTest, AdGuardHome, SSH
@@ -18598,21 +18656,24 @@ is throttling due to heat or if your storage/RAM is underperforming.
 
 Benchmark Categories:
 ─────────────────────
-• CPU & Thermal: Options 1 and 2 test the processor. The Stress Test pushes
-  all cores/threads to 100% to test heat soak, while the VPN & Crypto Benchmark ranks
-  this device against saved routers for WireGuard, OpenVPN and RSA throughput.
+• CPU & Thermal: CPU Thermal Stress Test and VPN & Crypto Benchmark test the
+  processor. The Stress Test pushes all cores/threads to 100% to test heat
+  soak, while the VPN & Crypto Benchmark ranks this device against saved
+  routers for WireGuard, OpenVPN and RSA throughput.
   The Stress Test asks how long to run (60 s by default) and shows the
   temperature and fan speed at the start, at the end and 3 seconds after.
-• Storage & Memory: Options 3 and 4 measure I/O speeds. Use these to test 
-  the performance of the internal NAND vs. attached USB 3.0 drives or to 
-  check if RAM bandwidth is saturated.
-• Connectivity: Options 5 and 6 measure latency and external WAN speeds. 
-  Essential for troubleshooting "slow internet" vs. "slow DNS." Option 6 (Ookla)
-  runs on every router - on MIPS, where Ookla ships no binary, it uses speedtest-go
-  against the same speedtest.net servers. Before downloading, it checks free space;
-  if flash is short it offers to run from RAM for this session instead.
-• Local Servers: Options 7, 8, and 9 turn the router into a speedtest target. 
-  These are used to test Wi-Fi/LAN limits without ISP interference.
+• Storage & Memory: Disk I/O and Memory I/O Benchmark measure I/O speeds. Use
+  these to test the performance of the internal NAND vs. attached USB 3.0
+  drives or to check if RAM bandwidth is saturated.
+• Connectivity: DNS Latency Benchmark and Ookla Internet Speedtest measure
+  latency and external WAN speeds. Essential for troubleshooting "slow
+  internet" vs. "slow DNS." Ookla Internet Speedtest runs on every router -
+  on MIPS, where Ookla ships no binary, it uses speedtest-go against the same
+  speedtest.net servers. Before downloading, it checks free space; if flash
+  is short it offers to run from RAM for this session instead.
+• Local Servers: LibreSpeed, iPerf3 and OpenSpeedTest turn the router into a
+  speedtest target. These are used to test Wi-Fi/LAN limits without ISP
+  interference.
 
 Technical Details:
 ──────────────────
@@ -18880,8 +18941,7 @@ install_ookla_speedtest() {   # [ondemand] - a benchmark run may use RAM (/tmp) 
                 print_info "Ookla ships no MIPS build ($arch), so there's no binary to"
                 print_info "persist to this router's flash"
                 printf "\n"
-                print_info "System Benchmarks -> \"Ookla Internet Speedtest\" still runs it on"
-                print_info "MIPS: the same speedtest.net test, via speedtest-go, on demand"
+                print_info "The speedtest.net test still runs on MIPS, via speedtest-go, on demand\n(System Benchmarks → Ookla Internet Speedtest)"
                 press_any_key
                 return 1
                 ;;
@@ -20852,7 +20912,7 @@ _ws_cli_watch() {   # <job dir> <item>
 # a blank line) becomes a table, titled by the line above it; with no table, its "Label: value" lines become rows.
 # The "this router" marker rows keep their marker text. (The raw output stays below, in the log card.)
 _ws_job_results() {   # <job id>
-    sed 's/\r//g' "$WS_JOBS/$1/log" 2>/dev/null | awk -v T="$(printf '\t')" -v E="$(printf '\033')" '
+    sed 's/\r$//; s/.*\r//' "$WS_JOBS/$1/log" 2>/dev/null | awk -v T="$(printf '\t')" -v E="$(printf '\033')" '
         function cols(s, a) { gsub(/^[ \t]+|[ \t]+$/, "", s); return split(s, a, /   */) }
         function rule(s) { return (index(s, "────") || index(s, "--------") || index(s, "========")) && s !~ /[A-Za-z0-9]/ }
         { cy[NR] = index($0, E "[36m") > 0; x = $0; gsub(E "\\[[0-9;?]*[A-Za-z]", "", x); L[NR] = x }
@@ -21705,7 +21765,7 @@ _wj_tweaks_repair() {   # the dialog was the confirmation; its answers arrive as
     [ "$(ws_args factory)" = 1 ] && fac=y
     rm -f /tmp/glutils/pr_state
     case "$1" in
-        check)   _pr_recheck ;;
+        check)   _pr_recheck web ;;
         repair)  PKG_ANS_REPAIR=y PKG_ANS_FACTORY=$fac pkg_repair_now ;;
         cache)   pkg_cache_rebuild_action ;;
         db)      PKG_ANS_REPAIR=y PKG_ANS_FACTORY=$fac pkg_db_repair_action ;;
@@ -21967,7 +22027,7 @@ _ws_rla_change() {   # <text> <option 1's label> <option 3's label> - the menu's
 # the remote LAN subnet isn't known: the tunnel's notice (menu: its page; page: its card) - the menu names its key
 _rla_lan_notice() {
     if [ "$1" = web ]; then printf 'info|%s' "Remote LAN is unknown: Detect or Set the Remote LAN finds or sets it"
-    else printf 'info|%s' "Remote LAN is unknown: [2] Detect or Set the Remote LAN finds or sets it"; fi
+    else printf 'info|%s' "Remote LAN is unknown: Detect or Set the Remote LAN (option 2) finds or sets it"; fi
 }
 _ws_net_rla() {
     local n t r i tun peer lan lanip rlan rgw st tn rt k a b c d dir lev any=0

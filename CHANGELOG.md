@@ -4,6 +4,38 @@ All notable changes to the GL.iNet Utilities toolkit. Newest first. Versions
 match the `# Version:` line in the script — `YYYY-MM-DD`, or `YYYY-MM-DD_HH:MM`
 for multiple releases on the same day.
 
+## 2026-11-10
+### What's New
+#### Toolkit-wide
+- Messages that send you to a menu item say what to do and add its option number: "install first
+  (option 1)", "Manage Persistence (option 3) keeps them". An item on another screen is named by its
+  path instead: "AdGuardHome Control Center → Recover Configuration". Help names items rather than
+  numbering them.
+
+### Bug Fixes
+#### Firmware Update
+- On a channel GL.iNet publishes no builds for (a Flint 3 on Beta), Update showed UNKNOWN (offline);
+  it shows NONE (no beta builds) now, and Check for Updates points to Choose a Build.
+- After an update, packages set to persist could fail to come back when the router missed one of GL.iNet's
+  package feeds while starting up (zram-swap couldn't find kmod-zram on a Flint 3); the re-install now
+  waits until every feed has been read.
+- Older builds in Choose a Build (menu and Admin Panel page) show their real release tag: GL's older file
+  names run the release number into the version's digits, so 4.3.26 showed as "release10326" instead of
+  "release1" (Mudi, Spitz, Spitz AX, Puli, Puli AX, Cirrus).
+
+#### Switch Position Indicator
+- Help quoted option numbers that change with the indicator's state; it names the items now.
+
+#### Admin Panel Page
+- AdGuardHome messages in a job's log pointed to "item 1" of a menu the page doesn't have; they name
+  the Control Center item now.
+- A click could fail with "The router didn't answer - Load failed" when the browser reused a connection
+  the router had just closed; the page now tries once more where that's safe (loading, reading, starting
+  a job) and otherwise says the connection dropped.
+- A progress line in a job's log could show a stale reading glued to the finished line ("Downloading the
+  firmware 54% of 103 MB - Downloading the firmware"); progress now updates in place and the log keeps
+  only the finished line.
+
 ## 2026-10-23
 ### Bug Fixes
 #### Hardware Information

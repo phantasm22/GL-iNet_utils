@@ -4,6 +4,19 @@ All notable changes to the GL.iNet Utilities toolkit. Newest first. Versions
 match the `# Version:` line in the script — `YYYY-MM-DD`, or `YYYY-MM-DD_HH:MM`
 for multiple releases on the same day.
 
+## 2026-11-10_13:01
+### Bug Fixes
+#### Firmware Update
+- Stopping an update before the flash (Stop on the Admin Panel page, or Ctrl-C in the menu) left the
+  downloaded image filling memory and its Update History entry at STARTED; the image is removed and the
+  entry reads CANCELLED.
+
+#### Admin Panel Page
+- A job's log could point to menu option numbers the page doesn't have ("Detect or set it first
+  (option 2)", "choose Optimize Tunnel (option 1)"); the page leaves the numbers out.
+- Stopping a job could leave one more progress line under [stopped] ("Downloading the firmware 11% of
+  35 MB"); the log ends where the job stopped.
+
 ## 2026-11-10
 ### What's New
 #### Toolkit-wide

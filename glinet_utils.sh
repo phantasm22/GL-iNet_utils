@@ -2,7 +2,7 @@
 # GL.iNet Router Toolkit
 # Author: phantasm22
 # License: GPL-3.0
-# Version: 2026-11-10
+# Version: 2026-11-10_13:01
 #
 # ── Versioning (bump the line above before every push to GitHub) ─────────────
 # The self-updater compares this value as a plain string (test's \> operator),
@@ -980,10 +980,18 @@ _TERM_RESTORED=""
 # to align under the text, past the leading glyph - callers no longer add spaces.
 # Each also sets _STARTUP_MSG: the final startup step ("Loading the main menu") holds the screen
 # when anything was said before the menu's clear, so no startup item needs its own pause.
-print_success() { local m="${1//\\n/\\n   }"; _STARTUP_MSG=1; printf "%b\n" "${BOLD}${GREEN}${_S_OK}${RESET}${GREEN}${m}${RESET}"; }
-print_error()   { local m="${1//\\n/\\n   }"; _STARTUP_MSG=1; printf "%b\n" "${BOLD}${RED}${_S_ERR}${RESET}${RED}${m}${RESET}"; }
-print_warning() { local m="${1//\\n/\\n   }"; _STARTUP_MSG=1; printf "%b\n" "${BOLD}${YELLOW}${_S_WARN}${RESET}${YELLOW}${m}${RESET}"; }
-print_info()    { local m="${1//\\n/\\n   }"; _STARTUP_MSG=1; printf "%b\n" "${BOLD}${BLUE}${_S_INFO}${RESET}${BLUE}${m}${RESET}"; }
+# an Admin Panel job's log has no menu numbers: "choose Optimize Tunnel (option 1)" reads "choose Optimize Tunnel"
+_job_nopt() {
+    local m="$1" a b
+    while :; do
+        case "$m" in *" (option "*")"*) a=${m%%" (option "*}; b=${m#*" (option "}; m="$a${b#*")"}" ;; *) break ;; esac
+    done
+    printf '%s' "$m"
+}
+print_success() { local m="${1//\\n/\\n   }"; [ -n "${GLU_JOB:-}" ] && m=$(_job_nopt "$m"); _STARTUP_MSG=1; printf "%b\n" "${BOLD}${GREEN}${_S_OK}${RESET}${GREEN}${m}${RESET}"; }
+print_error()   { local m="${1//\\n/\\n   }"; [ -n "${GLU_JOB:-}" ] && m=$(_job_nopt "$m"); _STARTUP_MSG=1; printf "%b\n" "${BOLD}${RED}${_S_ERR}${RESET}${RED}${m}${RESET}"; }
+print_warning() { local m="${1//\\n/\\n   }"; [ -n "${GLU_JOB:-}" ] && m=$(_job_nopt "$m"); _STARTUP_MSG=1; printf "%b\n" "${BOLD}${YELLOW}${_S_WARN}${RESET}${YELLOW}${m}${RESET}"; }
+print_info()    { local m="${1//\\n/\\n   }"; [ -n "${GLU_JOB:-}" ] && m=$(_job_nopt "$m"); _STARTUP_MSG=1; printf "%b\n" "${BOLD}${BLUE}${_S_INFO}${RESET}${BLUE}${m}${RESET}"; }
 
 # Standardized failure report (the ttyd failure path, generalized) - ONE shape everywhere, so a
 # failed install / enable / service start always tells the user the same things, in the same order:
@@ -1262,6 +1270,12 @@ _stale_session_sweep() {
     return 0
 }
 _session_cleanup() {
+    # a firmware update stopped before the flash (Ctrl-C, the page's Stop): its image leaves RAM and its record
+    # reads CANCELLED, not STARTED (_fw_end also starts any services stopped for it again)
+    if [ -n "${FW_STATE:-}" ] && [ "${FW_FLASHING:-}" != 1 ] && [ "$(_fw_st "$FW_STATE" status)" = started ]; then
+        rm -f "$FW_IMG"
+        _fw_end cancelled "[CANCELLED] stopped before the flash ($([ -n "${GLU_JOB:-}" ] && echo "Stop on the Admin Panel page" || echo "the toolkit was interrupted"))"
+    fi
     # services stopped for a firmware update that never reached the flash start again (Ctrl-C, the page's Stop)
     [ -n "${FW_STOPPED:-}" ] && [ "${FW_FLASHING:-}" != 1 ] && _fw_restart_stopped
     # stop the background measurement FIRST - one finishing between a delete and the stop would write its
@@ -21043,9 +21057,12 @@ _ws_job_start() {   # <screen> <tab> <action> <label>
     _ws_body "$1" "$2" | _ws_json "$1" "$2"   # no "Running" banner: the Log card says it (RUNNING, its latest line)
 }
 _ws_kill_tree() {   # <pid> - the job and everything it started (an iperf3 server, a stress worker)
-    local c
-    for c in $(awk -v p="$1" '$4 == p { print $1 }' /proc/[0-9]*/stat 2>/dev/null); do _ws_kill_tree "$c"; done
+    # the parent first, then what it started (listed before it goes): stopped children first, a job woke and
+    # printed once more under [stopped] ("Downloading the firmware 11%" after the Stop)
+    local c kids
+    kids=$(awk -v p="$1" '$4 == p { print $1 }' /proc/[0-9]*/stat 2>/dev/null)
     kill -TERM "$1" 2>/dev/null
+    for c in $kids; do _ws_kill_tree "$c"; done
 }
 _ws_job_stop() {   # <job id>
     local d="$WS_JOBS/$1" p
@@ -21940,6 +21957,8 @@ _wj_tweaks_firmware() {
                  if [ "$(ws_args keep)" = 0 ]; then export FW_ANS_KEEP=n FW_ANS_WIPE=y; else export FW_ANS_KEEP=y FW_ANS_WIPE=n; fi
                  [ "$(ws_args persist)" = 0 ] && export FW_ANS_PERSIST=n || export FW_ANS_PERSIST=y
                  export FW_ANS_GO=y
+                 # a job has no terminal traps: the page's Stop (TERM) still tidies up (_session_cleanup)
+                 trap '_session_cleanup; exit 143' TERM; trap '_session_cleanup; exit 130' INT
                  if [ "$(_fw_direction "$row")" = SAME ]; then _fw_install "$row" reinstall; else _fw_install "$row"; fi ;;
     esac
 }
